@@ -4,22 +4,57 @@ DAG 执行引擎 | 多智能体 Swarm | 全链路 Telemetry | 四层记忆 | 自
 
 ---
 
+## 环境准备
+
+### 必需依赖
+
+```bash
+pip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp
+pip install fastapi uvicorn python-multipart
+```
+
+### 可选依赖（缺失时自动降级）
+
+```bash
+pip install chromadb sentence-transformers   # 向量语义检索，缺失时退化为关键词检索
+pip install mcp                              # MCP 协议，缺失时跳过外部工具集成
+```
+
+### 配置
+
+编辑 `config.json`，填入模型 API 密钥。支持 `${ENV_VAR}` 语法引用环境变量：
+
+```json
+{
+  "router": {
+    "primary_model": {
+      "api_key": "${MIMO_API_KEY}",
+      "base_url": "https://token-plan-cn.xiaomimimo.com/v1"
+    }
+  }
+}
+```
+
+或通过 `.env` 文件设置 `MIMO_API_KEY=sk-...`，系统启动时自动加载。
+
+---
+
 ## 快速启动
 
 ```bash
-# 交互模式（默认）
+# 交互模式（默认）— 终端对话，支持 /help 查看所有命令
 python giraffe.py
 
-# 生产网关模式（FastAPI + WebSocket）
+# 生产网关模式 — 启动 FastAPI 服务，对外提供 REST / WebSocket / SSE 接口
 python giraffe.py --serve
 
-# 路由决策测试（不调用 API）
+# 路由测试 — 查看系统如何为一条消息选择模型和处理路径，不产生 API 调用
 python giraffe.py --test-route "帮我设计一个系统架构"
 
-# 系统健康检查
+# 系统健康检查 — 输出所有模块的状态摘要
 python giraffe.py --health
 
-# 触发进化引擎
+# 触发进化引擎 — 分析历史错误记录，自动优化抗体库
 python giraffe.py --evolve
 ```
 
@@ -75,6 +110,199 @@ python giraffe.py --evolve
 
 ---
 
+## 子系统详解
+
+### DAG 执行引擎（graph/）
+
+传统流水线是固定的 8 步顺序执行。Giraffe 将其重构为有向图（DAG），每个阶段对应一个 `Node` 子类。`GraphEngine` 按照注册的边进行状态流转，支持条件分支和反循环保护。
+
+**执行流程**：
+
+```
+DecomposeNode → ApprovalNode → MicroCompactNode → CreditCheckNode
+                                                        ↓
+                                               APICallNode ←──┐
+                                                   ↓          │
+                                              [成功?]         │
+                                              ↓     ↓         │
+                                            是    否(错误)     │
+                                            ↓       ↓         │
+                                     DeepCompactNode SelfHealNode
+                                            ↓       ↓
+                                       CacheNode  [重试次数<3?]
+                                                   是 → 回到 APICallNode
+                                                   否 → 返回降级结果
+```
+
+**断点续跑**：每个节点执行后，`CheckpointStore`（SQLite）自动保存 `(trace_id, node_name, step_index, state_json)` 快照。进程意外终止后，调用 `GraphEngine.resume(trace_id)` 即可从最后完成的节点继续执行。`rollback(trace_id, step_index)` 支持回滚到任意历史步骤。
+
+---
+
+### 多智能体 Swarm（swarm/）
+
+当路由引擎判断任务复杂度达到 `high` 级别（如大型代码生成、系统架构设计），系统自动将请求分流到 `SwarmOrchestrator` 进行多角色协作。
+
+**内置角色**：
+
+| 角色 | 模型偏好 | Temperature | 职责 |
+|------|---------|-------------|------|
+| Architect | 高推理模型 | 0.3 | 分析需求、设计方案、拆解任务 |
+| Coder | 编码模型 | 0.2 | 根据方案编写代码 |
+| Reviewer | 审查模型 | 0.1 | 检查质量、安全漏洞，输出 APPROVED 或修改意见 |
+| Tester | 默认模型 | 0.3 | 设计测试用例、执行测试 |
+
+**协作流程**：Architect 先输出方案 → Coder 根据方案编写代码 → Reviewer 审查。若 Reviewer 未输出 `APPROVED`，则携带审查意见回到 Coder 重修。最大 5 轮（可配置）。每轮发言通过 `EventBus` 实时广播，前端可通过 SSE/WebSocket 展示各角色的思考过程。
+
+---
+
+### 四层记忆系统（memory/）
+
+| 层级 | 存储介质 | 生命周期 | 用途 |
+|------|---------|---------|------|
+| 短期记忆 | 内存 LRU | 当前会话 | 保持对话上下文连贯 |
+| 事实记忆 | JSON 文件 | 持久化 | 自动提取的结构化知识（如"用户偏好 Python"） |
+| 长期记忆 | SQLite | 持久化 | 全量对话历史，支持关键词检索 |
+| 语义记忆 | ChromaDB | 持久化 | 基于 Embedding 的向量相似度召回 |
+
+**混合检索**：`MemorySystem.semantic_search()` 先从向量库召回 top_k 候选，再与关键词检索结果合并去重，按综合分数排序。检索结果自动注入到系统提示词中，为模型提供精准的历史上下文。
+
+**自动事实提取**：`AutoExtract` 模块通过正则规则从每轮对话中提取事实（如姓名、偏好、技术栈），写入事实记忆和向量库。
+
+**优雅降级**：若 ChromaDB 未安装，系统自动退化为纯关键词检索，不影响基础功能。
+
+---
+
+### 自愈免疫系统（self_heal/）
+
+Giraffe 将 API 调用失败视为「感染」，通过类似生物免疫系统的机制自动修复。
+
+**10 步排查流程**：
+
+1. 捕获异常 → 2. 分类错误类型 → 3. 查找匹配抗体 → 4. 执行修复动作（重试/降级/切换模型）→ 5. 验证修复结果 → 6. 记录成功的修复模式 → 7. 更新抗体优先级 → 8. 清理过期抗体 → 9. 通过 EventBus 广播自愈事件 → 10. 返回修复后的结果或最终降级响应
+
+**8 种内置抗体**：
+
+| 抗体 | 匹配模式 | 修复动作 |
+|------|---------|---------|
+| 网络超时 | `timeout`, `connect` | 指数退避重试 |
+| 速率限制 | `429`, `rate_limit` | 等待后重试 |
+| 模型不可用 | `model_not_found` | 切换到备用模型 |
+| 余额不足 | `insufficient_quota` | 切换到免费模型 |
+| 上下文溢出 | `context_length` | 触发深度压缩后重试 |
+| JSON 解析 | `json`, `parse` | 添加格式约束后重试 |
+| 权限拒绝 | `permission`, `403` | 降级到低权限模型 |
+| 服务不可用 | `503`, `502` | 等待 + 重试 |
+
+**进化引擎**：`EvolutionEngine` 定期分析历史错误日志，自动生成新抗体规则并淘汰长期无效的旧规则。调用 `/evolve` 命令可手动触发。
+
+---
+
+### 路由引擎（router/）
+
+系统使用双路径路由策略确定每条消息的处理方式：
+
+1. **快路径**（<1ms）：基于关键词和正则的意图分类器，处理明确意图的请求
+2. **慢路径**（~200ms）：当快路径置信度不足时，调用 LLM 进行精确分类
+
+路由结果包含：任务类型（chat/code/reasoning/vision）、复杂度（low/medium/high）、模型选择、是否触发 Swarm。
+
+**五档准入控制**：
+
+| 档位 | 比例 | 自动执行 | 成本上限 | 典型任务 |
+|------|------|---------|---------|---------|
+| 日常 (daily) | 40% | ✅ | $0.01 | 闲聊/搜索 |
+| 中等 (medium) | 40% | ✅ | $0.05 | 代码/视觉 |
+| 深度 (deep) | 15% | ❌ 需确认 | $1.00 | 大型代码/重构 |
+| 大神 (master) | 4% | ❌ 必须确认 | $5.00 | 复杂推理 |
+| 真神 (divine) | 1% | ❌ 必须确认 | $10.00 | 多模型协作 |
+
+---
+
+### 可观测性（observability/）
+
+所有关键路径（流水线 8 阶段、路由决策、自愈重试、Swarm 发言）均通过 OpenTelemetry 创建 Span。
+
+- `@traced` 装饰器：一行代码即可为任意函数添加追踪
+- EventBus 事件类型：`stage_start`, `stage_end`, `token_chunk`, `self_heal_attempt`, `swarm_turn`
+- 生产环境可对接 Jaeger / Zipkin 等后端查看完整 Trace 链
+
+---
+
+## 扩展开发
+
+### 添加自定义技能
+
+在 `skills/` 目录创建 `skill_` 前缀的 Python 文件，系统启动时自动加载：
+
+```python
+# skills/skill_weather.py
+
+SKILL_NAME = "天气查询"
+
+def execute(city: str) -> str:
+    """查询指定城市的天气。"""
+    # 实际实现：调用天气 API
+    return f"{city}：晴，25°C"
+```
+
+`SkillReviewer` 会自动为新技能评分（基于内容长度、是否包含示例、使用频次）。评分低于阈值且超过 30 天未使用的技能会被自动清理。
+
+### 添加 MCP 工具服务
+
+在 `config.json` 的 `mcp.servers` 段注册新的 MCP Server：
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "filesystem": {
+        "command": "npx",
+        "args": ["mcp-server-filesystem", "./"]
+      },
+      "github": {
+        "command": "npx",
+        "args": ["mcp-server-github"]
+      }
+    }
+  }
+}
+```
+
+系统启动时通过 `MCPRegistry` 自动连接所有配置的 Server，将其工具集注入到模型调用的 `tools` 参数中。模型可自主决定是否调用外部工具。
+
+### 注册生命周期钩子
+
+`HookSystem` 提供 7 个生命周期事件，可用于日志、监控或自定义逻辑注入：
+
+```python
+from integration.hooks import HookSystem
+
+hooks = HookSystem()
+hooks.register("on_before_api_call", lambda ctx: print(f"即将调用 {ctx['model']}"))
+hooks.register("on_after_api_call",  lambda ctx: print(f"耗时 {ctx['duration_ms']}ms"))
+hooks.register("on_error",           lambda ctx: print(f"错误: {ctx['error']}"))
+```
+
+### 自定义抗体规则
+
+在代码中动态添加针对特定业务场景的抗体：
+
+```python
+from self_heal.antibody import AntibodyLibrary, Antibody
+
+lib = AntibodyLibrary()
+lib.add(Antibody(
+    name="custom_db_error",
+    pattern=r"database.*connection.*refused",
+    action="retry",
+    description="数据库连接被拒绝时自动重试",
+    priority=8,
+))
+lib.save()  # 持久化到磁盘
+```
+
+---
+
 ## CLI 命令
 
 | 命令 | 说明 |
@@ -98,26 +326,52 @@ python giraffe.py --evolve
 
 | 端点 | 方法 | 说明 |
 |------|------|------|
-| `/api/chat` | POST | 发送消息，返回 SSE 流（支持 multipart 图片上传） |
-| `/api/events` | GET | SSE 订阅实时事件流 |
+| `/api/chat` | POST | 发送消息，返回 SSE 流。支持 `multipart/form-data` 上传图片 |
+| `/api/events` | GET | SSE 订阅实时事件流（流水线阶段、Swarm 发言、自愈进度） |
 | `/ws/chat` | WS | 全双工 WebSocket，token 级流式响应 |
 | `/api/health` | GET | 系统健康状态 JSON |
 
+**调用示例**：
+
+```bash
+# 发送文本消息
+curl -X POST http://localhost:8000/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "写一个快速排序"}'
+
+# 发送图片（多模态）
+curl -X POST http://localhost:8000/api/chat \
+  -F "message=描述这张图片" \
+  -F "images=@photo.jpg"
+
+# 监听实时事件
+curl -N http://localhost:8000/api/events
+```
+
 ---
 
-## 配置文件 config.json
+## 完整配置参考
 
 ```json
 {
-  "router.primary_model.api_key": "${MIMO_API_KEY}",
-  "router.primary_model.base_url": "https://...",
+  "router": {
+    "primary_model": {
+      "api_key": "${MIMO_API_KEY}",
+      "base_url": "https://token-plan-cn.xiaomimimo.com/v1"
+    }
+  },
   "observability": {
     "enabled": true,
+    "exporter": "otlp",
     "endpoint": "localhost:4317",
     "service_name": "giraffe"
   },
   "memory": {
-    "vector_store": { "enabled": true, "top_k": 5 }
+    "vector_store": {
+      "enabled": true,
+      "embedding_model": "all-MiniLM-L6-v2",
+      "top_k": 5
+    }
   },
   "mcp": {
     "servers": {
@@ -129,23 +383,15 @@ python giraffe.py --evolve
     "max_rounds": 5,
     "roles": ["architect", "coder", "reviewer"],
     "trigger_complexity": "high"
+  },
+  "security": {
+    "max_budget_daily": 3.3
+  },
+  "credit_monitor": {
+    "enabled": true
   }
 }
 ```
-
-支持 `${ENV_VAR}` 环境变量引用。
-
----
-
-## 五档路由
-
-| 档位 | 比例 | 自动执行 | 成本上限 | 典型任务 |
-|------|------|---------|---------|---------|
-| 日常 (daily) | 40% | ✅ | $0.01 | 闲聊/搜索 |
-| 中等 (medium) | 40% | ✅ | $0.05 | 代码/视觉 |
-| 深度 (deep) | 15% | ❌ 需确认 | $1.00 | 大型代码/重构 |
-| 大神 (master) | 4% | ❌ 必须确认 | $5.00 | 复杂推理 |
-| 真神 (divine) | 1% | ❌ 必须确认 | $10.00 | 多模型协作 |
 
 ---
 
@@ -156,11 +402,18 @@ python giraffe.py --evolve
 python -m pytest tests/ -v
 
 # 单模块测试
-python -m pytest tests/test_memory_robust.py -v   # 记忆系统健壮性 (58)
-python -m pytest tests/test_selfheal_robust.py -v # 自愈+EventBus (70)
-python -m pytest tests/test_skills.py -v           # Skill全模块 (74)
-python -m pytest tests/test_graph.py -v            # DAG引擎 (35)
+python -m pytest tests/test_executor.py -v         # 执行管道基础
+python -m pytest tests/test_graph.py -v            # DAG 引擎 (35)
 python -m pytest tests/test_swarm.py -v            # Swarm (21)
+python -m pytest tests/test_memory.py -v           # 记忆系统基础
+python -m pytest tests/test_memory_robust.py -v    # 记忆系统健壮性 (58)
+python -m pytest tests/test_selfheal_robust.py -v  # 自愈 + EventBus 健壮性 (70)
+python -m pytest tests/test_skills.py -v           # Skill 全模块 (74)
+python -m pytest tests/test_observability.py -v    # Telemetry
+python -m pytest tests/test_phase2.py -v           # VectorStore / MCP
+python -m pytest tests/test_router.py -v           # 路由引擎
+python -m pytest tests/test_security.py -v         # 安全防护
+python -m pytest tests/test_integration.py -v      # 集成与工作流
 ```
 
 ---
@@ -175,144 +428,99 @@ giraffe/
 ├── feature_registry.json       # 能力注册表
 │
 ├── observability/              # 全链路可观测性
-│   └── tracer.py               # OpenTelemetry Tracer + @traced 装饰器
+│   └── tracer.py               #   OpenTelemetry Tracer + @traced 装饰器
 │
 ├── core/                       # 配置与状态中心
-│   ├── config.py               # GiraffeConfig（环境变量/config.json 解析）
-│   ├── state.py                # AppState 全局单例
-│   ├── task_manager.py         # 任务管理
-│   ├── credit_monitor.py       # API 信用监控
-│   └── skill_reviewer.py       # 技能评分/查重/截断（Jaccard 相似度）
+│   ├── config.py               #   GiraffeConfig（环境变量 / config.json 解析）
+│   ├── state.py                #   AppState 全局单例
+│   ├── task_manager.py         #   任务管理
+│   ├── credit_monitor.py       #   API 信用监控与兜底切换
+│   └── skill_reviewer.py       #   技能评分 / Jaccard 查重 / 过期截断
 │
 ├── router/                     # 路由引擎
-│   ├── engine.py               # RouterEngine（双路径路由 + Swarm 触发判断）
-│   ├── intent_classifier.py    # 意图分类
-│   ├── llm_classifier.py       # LLM 慢路径分类
-│   ├── model_registry.py       # 9×3 模型矩阵
-│   ├── query_complexity.py     # 复杂度评估
-│   ├── gatekeeper.py           # 五档准入控制
-│   └── subagent_router.py      # 子Agent路由
+│   ├── engine.py               #   RouterEngine（双路径 + Swarm 触发）
+│   ├── intent_classifier.py    #   关键词意图分类
+│   ├── llm_classifier.py       #   LLM 慢路径分类
+│   ├── model_registry.py       #   9×3 模型矩阵
+│   ├── query_complexity.py     #   复杂度评估
+│   ├── gatekeeper.py           #   五档准入控制
+│   └── subagent_router.py      #   子 Agent 路由
 │
 ├── executor/                   # 执行管道
-│   ├── pipeline.py             # ExecutorPipeline（DAG GraphEngine 驱动）
-│   ├── circuit_breaker.py      # 熔断器（CLOSED→OPEN→HALF_OPEN 状态机）
-│   ├── response_cache.py       # 响应缓存（LRU + TTL + 磁盘持久化）
-│   ├── task_decomposer.py      # 多步骤任务分解
-│   ├── micro_compact.py        # 微压缩（单条消息 >500字 截断）
-│   ├── deep_compact.py         # 深度压缩（对话 >20条 滑动窗口）
-│   ├── parallel_executor.py    # 并行子Agent执行（ThreadPoolExecutor）
-│   ├── skill_loader.py         # 技能动态加载（skill_*.py 前缀）
-│   ├── progressive_loader.py   # 渐进式技能缓存（优先级自动提升）
-│   └── deferred_tool_loader.py # 延迟工具加载（18内置工具）
+│   ├── pipeline.py             #   ExecutorPipeline（DAG GraphEngine 驱动）
+│   ├── circuit_breaker.py      #   熔断器（CLOSED → OPEN → HALF_OPEN）
+│   ├── response_cache.py       #   响应缓存（LRU + TTL + 磁盘持久化）
+│   ├── task_decomposer.py      #   多步骤任务分解
+│   ├── micro_compact.py        #   微压缩（>500 字截断）
+│   ├── deep_compact.py         #   深度压缩（>20 条滑动窗口）
+│   ├── parallel_executor.py    #   并行子 Agent 执行
+│   ├── skill_loader.py         #   技能动态加载（skill_*.py）
+│   ├── progressive_loader.py   #   渐进式技能缓存（优先级提升）
+│   └── deferred_tool_loader.py #   延迟工具加载（18 内置工具）
 │
 ├── graph/                      # DAG 执行引擎
-│   ├── state.py                # GraphState（不可变流转状态）
-│   ├── node.py                 # Node 抽象 + 8个具体节点子类
-│   ├── engine.py               # GraphEngine（条件边/反循环保护/checkpoint）
-│   ├── checkpoint.py           # CheckpointStore（SQLite 断点续跑/回滚）
+│   ├── state.py                #   GraphState 不可变状态
+│   ├── node.py                 #   Node 抽象 + 8 个节点子类
+│   ├── engine.py               #   GraphEngine（条件边 / checkpoint）
+│   ├── checkpoint.py           #   CheckpointStore（SQLite 断点续跑）
 │   └── nodes/
-│       └── swarm_node.py       # SwarmNode（DAG 内嵌 Swarm 讨论）
+│       └── swarm_node.py       #   SwarmNode（DAG 内嵌 Swarm）
 │
 ├── swarm/                      # 多智能体集群
-│   ├── agent.py                # AgentProfile + Agent.think()
-│   ├── profiles.py             # 预置角色：ARCHITECT/CODER/REVIEWER/TESTER
-│   └── orchestrator.py         # SwarmOrchestrator（多轮讨论编排）
+│   ├── agent.py                #   AgentProfile + Agent.think()
+│   ├── profiles.py             #   ARCHITECT / CODER / REVIEWER / TESTER
+│   └── orchestrator.py         #   SwarmOrchestrator 多轮编排
 │
-├── memory/                     # 四层记忆架构
-│   ├── memory_system.py        # MemorySystem 门面（单例）
-│   ├── structured_memory.py    # 结构化事实记忆（JSON持久化）
-│   ├── auto_extract.py         # 自动事实提取（正则规则）
-│   ├── memory_refiner.py       # 记忆精炼（去重/置信度保留）
-│   ├── vector_store.py         # VectorStore（ChromaDB，优雅降级）
-│   └── diary.py                # 会话日记
+├── memory/                     # 四层记忆
+│   ├── memory_system.py        #   MemorySystem 门面
+│   ├── structured_memory.py    #   结构化事实（JSON）
+│   ├── auto_extract.py         #   自动事实提取
+│   ├── memory_refiner.py       #   记忆精炼（去重 / 置信度）
+│   ├── vector_store.py         #   VectorStore（ChromaDB）
+│   └── diary.py                #   会话日记
 │
-├── self_heal/                  # 自愈免疫系统
-│   ├── antibody.py             # AntibodyLibrary（8内置抗体 + 磁盘持久化）
-│   ├── error_processor.py      # ErrorProcessor（10步排查 + 模型降级链）
-│   ├── evolution.py            # EvolutionEngine（自动优化/生成/淘汰抗体）
-│   ├── fault_playbook.py       # FaultPlaybook（分类处置手册）
-│   └── skill_crystallizer.py   # 技能结晶化
+├── self_heal/                  # 自愈免疫
+│   ├── antibody.py             #   AntibodyLibrary（8 内置 + 持久化）
+│   ├── error_processor.py      #   ErrorProcessor 10 步排查
+│   ├── evolution.py            #   EvolutionEngine 抗体进化
+│   ├── fault_playbook.py       #   FaultPlaybook 分类手册
+│   └── skill_crystallizer.py   #   技能结晶化
 │
 ├── security/                   # 安全防护
-│   ├── approval.py             # P0/P1/P2 三级审批
-│   ├── guardrail_middleware.py # 3护栏（危险命令/密钥泄露/预算）
-│   ├── token_tracker.py        # Token预算追踪
-│   └── permission_system.py    # 权限系统
+│   ├── approval.py             #   P0/P1/P2 三级审批
+│   ├── guardrail_middleware.py #   3 护栏
+│   ├── token_tracker.py        #   Token 预算追踪
+│   └── permission_system.py    #   权限系统
 │
 ├── integration/                # 集成与网关
-│   ├── web_server.py           # FastAPI 服务（/api/chat, /ws/chat, /api/events）
-│   ├── event_stream.py         # EventBus（进程内事件总线 + SSE/WS 推送）
-│   ├── gateway_api.py          # GatewayAPI 单例
-│   ├── mcp_client.py           # MCPClient（MCP 协议客户端）
-│   ├── mcp_registry.py         # MCPRegistry（多 Server 连接池）
-│   ├── multimodal.py           # 多模态（图像 Base64 编码/Vision content 构建）
-│   ├── hermes_bridge.py        # HermesBridge（委托 MCPRegistry）
-│   ├── hooks.py                # HookSystem（7生命周期钩子）
-│   ├── cron_sync.py            # 定时同步
-│   └── startup.py              # 启动管理器
+│   ├── web_server.py           #   FastAPI（REST / WS / SSE）
+│   ├── event_stream.py         #   EventBus 事件总线
+│   ├── gateway_api.py          #   GatewayAPI 单例
+│   ├── mcp_client.py           #   MCPClient
+│   ├── mcp_registry.py         #   MCPRegistry 连接池
+│   ├── multimodal.py           #   多模态 Base64 / Vision
+│   ├── hermes_bridge.py        #   HermesBridge → MCPRegistry
+│   ├── hooks.py                #   HookSystem 7 生命周期钩子
+│   ├── cron_sync.py            #   定时同步
+│   └── startup.py              #   启动管理器
 │
 ├── adapt/                      # 自动适配
-│   ├── adapter.py              # HermesAdapter（自动修复配置差异）
-│   ├── scanner.py              # HermesScanner
-│   └── compat_report.py        # 兼容性报告
+│   ├── adapter.py              #   HermesAdapter
+│   ├── scanner.py              #   HermesScanner
+│   └── compat_report.py        #   兼容性报告
 │
 ├── sandbox/                    # 沙箱执行
-│   ├── manager.py              # SandboxManager（Docker/本地降级）
-│   └── executor.py             # SandboxExecutor
+│   ├── manager.py              #   SandboxManager
+│   └── executor.py             #   SandboxExecutor
 │
 ├── workflow/                   # 工作流引擎
-│   ├── engine.py               # WorkflowEngine（暂停/恢复/checkpoint）
-│   └── step.py                 # WorkflowStep + StepStatus 状态机
+│   ├── engine.py               #   WorkflowEngine（暂停 / 恢复）
+│   └── step.py                 #   WorkflowStep 状态机
 │
 ├── skills/                     # 动态技能目录
-│   └── skill_example.py        # 示例：文本转大写
+│   └── skill_example.py        #   示例：文本转大写
 │
-├── plugins/                    # 插件配置目录
-│   ├── giraffe-full/
-│   ├── disk-cleanup/
-│   ├── kanban/
-│   └── observability/
-│
+├── plugins/                    # 插件配置
 ├── data/                       # 运行时数据（自动创建）
-│   └── memory.db               # SQLite 长期记忆 + checkpoint
-│
 └── tests/                      # 429 个测试用例
-    ├── test_executor.py         # 执行管道基础测试
-    ├── test_graph.py            # DAG引擎 (35)
-    ├── test_swarm.py            # Swarm (21)
-    ├── test_memory.py           # 记忆系统基础
-    ├── test_memory_robust.py    # 记忆系统健壮性 (58)
-    ├── test_observability.py    # Telemetry
-    ├── test_phase2.py           # VectorStore/MCP
-    ├── test_router.py           # 路由引擎
-    ├── test_security.py         # 安全防护
-    ├── test_self_heal.py        # 自愈系统基础
-    ├── test_selfheal_robust.py  # 自愈+EventBus健壮性 (70)
-    ├── test_skills.py           # Skill全模块 (74)
-    └── test_integration.py      # 集成与工作流
 ```
-
----
-
-## 依赖安装
-
-```bash
-# 核心依赖
-pip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp
-pip install fastapi uvicorn python-multipart
-
-# 可选：语义检索（无则降级为关键词检索）
-pip install chromadb sentence-transformers
-
-# 可选：MCP 工具协议
-pip install mcp
-```
-
----
-
-## 设计原则
-
-- **优雅降级**：ChromaDB / Ollama / MCP Server 缺失时静默禁用，基础 CLI 链路始终可用
-- **单向数据流**：`GraphState` 不可变，每节点返回新状态
-- **零停机自愈**：所有 API 调用挂载 `ErrorProcessor`，通过重试/降级/抗体修复实现自愈
-- **实时可见**：Swarm 协作、流水线阶段切换、自愈尝试均通过 `EventBus` 实时广播
