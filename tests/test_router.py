@@ -72,23 +72,23 @@ class TestGatekeeper:
     def setup_method(self):
         self.gk = Gatekeeper()
 
-    def test_chat_is_daily_auto(self):
+    def test_chat_is_nano_auto(self):
         result = self.gk.check(TaskType.CHAT)
-        assert result.tier == RouteTier.DAILY
+        assert result.tier == RouteTier.NANO
         assert result.auto_execute is True
 
-    def test_code_large_is_deep_confirm(self):
+    def test_code_large_is_medium_confirm(self):
         result = self.gk.check(TaskType.CODE_LARGE)
-        assert result.tier == RouteTier.DEEP
+        assert result.tier == RouteTier.MEDIUM
         assert result.requires_confirmation is True
 
-    def test_reasoning_is_master(self):
+    def test_reasoning_is_high(self):
         result = self.gk.check(TaskType.REASONING)
-        assert result.tier in (RouteTier.MASTER, RouteTier.DIVINE)
+        assert result.tier in (RouteTier.HIGH, RouteTier.XHIGH)
 
     def test_extreme_complexity_upgrades_tier(self):
         result = self.gk.check(TaskType.CHAT, ComplexityLevel.EXTREME)
-        assert result.tier.value in ("master", "divine")
+        assert result.tier.value in ("high", "xhigh")
 
 
 class TestModelRegistry:

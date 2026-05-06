@@ -1,6 +1,6 @@
 """
 Gatekeeper — 准入控制器
-实现五档路由模式：日常40% / 中等40% / 深度15% / 大神4% / 真神1%
+实现五档路由模式：nano 40% / low 40% / medium 15% / high 4% / xhigh 1%
 """
 from __future__ import annotations
 
@@ -14,11 +14,11 @@ from .query_complexity import ComplexityLevel
 
 class RouteTier(str, Enum):
     """五档路由档位。"""
-    DAILY   = "daily"    # 日常 40%
-    MEDIUM  = "medium"   # 中等 40%
-    DEEP    = "deep"     # 深度 15%
-    MASTER  = "master"   # 大神 4%
-    DIVINE  = "divine"   # 真神 1%
+    NANO    = "nano"     # 40%
+    LOW     = "low"      # 40%
+    MEDIUM  = "medium"   # 15%
+    HIGH    = "high"     # 4%
+    XHIGH   = "xhigh"    # 1%
 
 
 @dataclass
@@ -33,25 +33,25 @@ class TierConfig:
 
 # 五档配置
 TIER_CONFIGS: dict[RouteTier, TierConfig] = {
-    RouteTier.DAILY:  TierConfig(RouteTier.DAILY,  0.40, True,  0.01, "mimo-v2.5",        "日常任务，自动执行"),
-    RouteTier.MEDIUM: TierConfig(RouteTier.MEDIUM, 0.40, True,  0.05, "mimo-v2.5-pro",    "中等任务，自动执行"),
-    RouteTier.DEEP:   TierConfig(RouteTier.DEEP,   0.15, False, 1.00, "claude-sonnet-4.6","深度任务，需确认"),
-    RouteTier.MASTER: TierConfig(RouteTier.MASTER, 0.04, False, 5.00, "opus-4.7",         "大神任务，必须确认"),
-    RouteTier.DIVINE: TierConfig(RouteTier.DIVINE, 0.01, False,10.00, "opus-4.7+gpt-5.5", "真神任务，必须确认"),
+    RouteTier.NANO:   TierConfig(RouteTier.NANO,   0.40, True,  0.01, "mimo-v2.5",        "nano: auto"),
+    RouteTier.LOW:    TierConfig(RouteTier.LOW,    0.40, True,  0.05, "mimo-v2.5-pro",    "low: auto"),
+    RouteTier.MEDIUM: TierConfig(RouteTier.MEDIUM, 0.15, False, 1.00, "claude-sonnet-4.6","medium: confirm"),
+    RouteTier.HIGH:   TierConfig(RouteTier.HIGH,   0.04, False, 5.00, "opus-4.7",         "high: confirm"),
+    RouteTier.XHIGH:  TierConfig(RouteTier.XHIGH,  0.01, False,10.00, "opus-4.7+gpt-5.5", "xhigh: confirm"),
 }
 
 # 任务类型 → 默认档位映射
 TASK_TIER_MAP: dict[TaskType, RouteTier] = {
-    TaskType.CHAT:            RouteTier.DAILY,
-    TaskType.CODE_SMALL:      RouteTier.DAILY,
-    TaskType.CODE_MEDIUM:     RouteTier.MEDIUM,
-    TaskType.CODE_LARGE:      RouteTier.DEEP,
-    TaskType.REASONING_LIGHT: RouteTier.MEDIUM,
-    TaskType.REASONING:       RouteTier.MASTER,
-    TaskType.VISION:          RouteTier.MEDIUM,
-    TaskType.SEARCH:          RouteTier.DAILY,
-    TaskType.ROUTING:         RouteTier.DAILY,
-    TaskType.SUBTASK:         RouteTier.DAILY,
+    TaskType.CHAT:            RouteTier.NANO,
+    TaskType.CODE_SMALL:      RouteTier.NANO,
+    TaskType.CODE_MEDIUM:     RouteTier.LOW,
+    TaskType.CODE_LARGE:      RouteTier.MEDIUM,
+    TaskType.REASONING_LIGHT: RouteTier.LOW,
+    TaskType.REASONING:       RouteTier.HIGH,
+    TaskType.VISION:          RouteTier.LOW,
+    TaskType.SEARCH:          RouteTier.NANO,
+    TaskType.ROUTING:         RouteTier.NANO,
+    TaskType.SUBTASK:         RouteTier.NANO,
 }
 
 
@@ -117,17 +117,17 @@ class Gatekeeper:
         complexity_level: ComplexityLevel | None,
     ) -> RouteTier:
         """综合任务类型和复杂度确定档位。"""
-        base_tier = TASK_TIER_MAP.get(task_type, RouteTier.DAILY)
+        base_tier = TASK_TIER_MAP.get(task_type, RouteTier.NANO)
 
         # 复杂度提升档位
         if complexity_level in (ComplexityLevel.EXTREME,):
-            # 极复杂：至少提升到 MASTER
-            if base_tier in (RouteTier.DAILY, RouteTier.MEDIUM, RouteTier.DEEP):
-                return RouteTier.MASTER
+            # 极复杂：至少提升到 HIGH
+            if base_tier in (RouteTier.NANO, RouteTier.LOW, RouteTier.MEDIUM):
+                return RouteTier.HIGH
         elif complexity_level == ComplexityLevel.COMPLEX:
             # 复杂：提升一档
-            tier_order = [RouteTier.DAILY, RouteTier.MEDIUM, RouteTier.DEEP,
-                          RouteTier.MASTER, RouteTier.DIVINE]
+            tier_order = [RouteTier.NANO, RouteTier.LOW, RouteTier.MEDIUM,
+                          RouteTier.HIGH, RouteTier.XHIGH]
             idx = tier_order.index(base_tier)
             if idx < len(tier_order) - 1:
                 return tier_order[idx + 1]
@@ -136,7 +136,7 @@ class Gatekeeper:
 
     def is_auto_executable(self, task_type: TaskType) -> bool:
         """快速判断是否可以自动执行（无需确认）。"""
-        tier = TASK_TIER_MAP.get(task_type, RouteTier.DAILY)
+        tier = TASK_TIER_MAP.get(task_type, RouteTier.NANO)
         return self._tiers[tier].auto_execute
 
     def get_tier_info(self, tier: RouteTier) -> TierConfig:
