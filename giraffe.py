@@ -442,19 +442,76 @@ class Giraffe:
 
 
 # ─── CLI 主循环 ───────────────────────────────────────────────────────────────
+# 用户级配置目录（pip install 后使用）
+USER_CONFIG_DIR = Path.home() / ".giraffe"
+
+
+def _init_user_config() -> None:
+    """将默认配置文件复制到 ~/.giraffe/，供 pip 安装后首次使用。"""
+    import shutil
+
+    USER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
+    # 复制 config.json
+    src_config = BASE_DIR / "config.json"
+    dst_config = USER_CONFIG_DIR / "config.json"
+    if src_config.exists() and not dst_config.exists():
+        shutil.copy2(src_config, dst_config)
+        print(f"  ✅ 配置文件 → {dst_config}")
+    elif dst_config.exists():
+        print(f"  ⏭️  配置文件已存在: {dst_config}")
+
+    # 复制 feature_registry.json
+    src_reg = BASE_DIR / "feature_registry.json"
+    dst_reg = USER_CONFIG_DIR / "feature_registry.json"
+    if src_reg.exists() and not dst_reg.exists():
+        shutil.copy2(src_reg, dst_reg)
+        print(f"  ✅ 能力注册表 → {dst_reg}")
+
+    # 创建 data/ 子目录
+    (USER_CONFIG_DIR / "data").mkdir(exist_ok=True)
+    # 创建 skills/ 子目录
+    (USER_CONFIG_DIR / "skills").mkdir(exist_ok=True)
+
+    print(f"\n初始化完成。请编辑 {dst_config} 填入 API Key。")
+    print(f"之后运行 giraffe 即可启动。\n")
+
+
+def _resolve_config_path(explicit: str | None) -> Path:
+    """
+    配置文件查找优先级：
+    1. --config 显式指定
+    2. 当前目录的 config.json（开发模式）
+    3. ~/.giraffe/config.json（pip 安装模式）
+    4. 包内默认 config.json
+    """
+    if explicit:
+        return Path(explicit)
+    cwd_config = Path.cwd() / "config.json"
+    if cwd_config.exists():
+        return cwd_config
+    user_config = USER_CONFIG_DIR / "config.json"
+    if user_config.exists():
+        return user_config
+    return BASE_DIR / "config.json"
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Giraffe — 智能AI助手框架",
+        description="Giraffe — 生产级 AI 运行时框架",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
+        epilog="""\
 示例:
-  python giraffe.py                         # 启动交互模式
-  python giraffe.py --test-route "帮我写个Flask API"  # 测试路由
-  python giraffe.py --health                # 系统健康检查
-  python giraffe.py --evolve                # 触发进化
+  giraffe                                  # 启动交互模式
+  giraffe --serve                          # 启动 Web 服务
+  giraffe --init                           # 初始化用户配置到 ~/.giraffe/
+  giraffe --test-route "帮我写个Flask API"  # 测试路由
+  giraffe --health                         # 系统健康检查
         """,
     )
     parser.add_argument("--config", default=None, help="配置文件路径")
+    parser.add_argument("--init", action="store_true", help="初始化用户配置到 ~/.giraffe/")
+    parser.add_argument("--version", action="store_true", help="显示版本号")
     parser.add_argument("--test-route", metavar="MSG", help="测试路由决策（不调用API）")
     parser.add_argument("--health", action="store_true", help="显示系统健康状态")
     parser.add_argument("--evolve", action="store_true", help="触发进化引擎")
@@ -464,10 +521,21 @@ def main():
     parser.add_argument("--port", type=int, default=8000, help="Web 服务监听端口")
     args = parser.parse_args()
 
+    if args.version:
+        print("giraffe-immortal 1.0.0")
+        return
+
+    if args.init:
+        print("正在初始化 Giraffe 用户配置...\n")
+        _init_user_config()
+        return
+
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
 
-    giraffe = Giraffe(config_path=args.config)
+    config_path = _resolve_config_path(args.config)
+    giraffe = Giraffe(config_path=config_path)
+
     giraffe.initialize()
 
     # ── 特殊模式 ──────────────────────────────────────────────────────────────
