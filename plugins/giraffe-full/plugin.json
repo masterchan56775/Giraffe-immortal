@@ -1,0 +1,1 @@
+{"name": "giraffe-full", "version": "1.0.0", "description": "Giraffe完整功能插件（核心插件）", "entry": "giraffe.py", "capabilities": ["router", "executor", "memory", "self_heal", "security"]}

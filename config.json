@@ -1,0 +1,194 @@
+{
+  "observability": {
+    "enabled": false,
+    "exporter": "otlp",
+    "endpoint": "",
+    "service_name": "giraffe",
+    "console_export": false
+  },
+  "display": {
+    "skin": "giraffe",
+    "streaming": true,
+    "progress_bar": true,
+    "syntax_highlight": true,
+    "markdown_render": true
+  },
+  "compression": {
+    "enabled": true,
+    "micro_threshold": 500,
+    "deep_threshold": 20,
+    "algorithm": "sliding_window"
+  },
+  "checkpoints": {
+    "enabled": true,
+    "interval": 300,
+    "max_checkpoints": 10,
+    "auto_cleanup": true
+  },
+  "plugins": {
+    "list": [
+      "giraffe-full",
+      "disk-cleanup",
+      "kanban",
+      "observability"
+    ],
+    "auto_update": true,
+    "registry_url": "https://plugins.giraffe.dev"
+  },
+  "security": {
+    "approval_mode": "confirm",
+    "max_budget_daily": 3.3,
+    "max_budget_monthly": 100,
+    "guardrails_enabled": true
+  },
+  "memory": {
+    "auto_extract": true,
+    "confidence_threshold": 0.7,
+    "max_facts": 1000,
+    "cleanup_interval": 86400,
+    "vector_store": {
+      "enabled": false,
+      "embedding_model": "all-MiniLM-L6-v2",
+      "top_k": 5
+    }
+  },
+  "credit_monitor": {
+    "enabled": true,
+    "auto_fallback_to_primary": true,
+    "auto_recover_on_topup": true,
+    "check_interval": 300,
+    "notification_enabled": true
+  },
+  "executor": {
+    "parallel_max_workers": 3,
+    "task_timeout": 300,
+    "progressive_loading": true,
+    "deferred_tools": true,
+    "cache_model_info": true
+  },
+  "lazy_load_skills": {
+    "enabled": true,
+    "cache_duration": 86400,
+    "priority_boost_threshold": 5,
+    "cleanup_interval": 2592000
+  },
+  "auto_fusion": {
+    "enabled": true,
+    "scan_on_startup": true,
+    "auto_fuse_priority": [
+      "P0",
+      "P1"
+    ],
+    "require_confirm_for": [
+      "P2"
+    ]
+  },
+  "router": {
+    "mode": "auto",
+    "complexity_estimation": true,
+    "llm_fallback": true,
+    "primary_model": {
+      "provider": "xiaomi",
+      "model": "mimo-v2.5",
+      "api_key": "${MIMO_API_KEY}",
+      "base_url": "https://token-plan-cn.xiaomimimo.com/v1"
+    },
+    "model_matrix": {
+      "chat": {
+        "primary": "mimo-v2.5",
+        "fallback": "mimo-v2.5",
+        "emergency": "mimo-v2-flash"
+      },
+      "code_small": {
+        "primary": "mimo-v2.5-pro",
+        "fallback": "mimo-v2.5",
+        "emergency": "mimo-v2.5"
+      },
+      "code_medium": {
+        "primary": "mimo-v2.5",
+        "fallback": "claude-haiku-4.5",
+        "emergency": "mimo-v2.5-pro"
+      },
+      "code_large": {
+        "primary": "claude-sonnet-4.6",
+        "fallback": "mimo-v2.5",
+        "emergency": "claude-haiku-4.5"
+      },
+      "reasoning_light": {
+        "primary": "mimo-v2.5",
+        "fallback": "mimo-v2.5",
+        "emergency": "claude-haiku-4.5"
+      },
+      "reasoning": {
+        "primary": "opus-4.7",
+        "fallback": "claude-sonnet-4.6",
+        "emergency": "gpt-5.5"
+      },
+      "vision": {
+        "primary": "mimo-v2-omni",
+        "fallback": "gemini-3-flash",
+        "emergency": "claude-sonnet-4.6"
+      },
+      "routing": {
+        "primary": "mimo-v2-flash",
+        "fallback": "mimo-v2.5",
+        "emergency": "mimo-v2.5"
+      },
+      "subtask": {
+        "primary": "mimo-v2.5",
+        "fallback": "mimo-v2.5",
+        "emergency": "mimo-v2-flash"
+      }
+    },
+    "circuit_breaker": {
+      "failure_threshold": 3,
+      "cooldown_seconds": 60,
+      "half_open_max_calls": 1
+    },
+    "tiers": {
+      "daily": {
+        "ratio": 0.4,
+        "auto_execute": true,
+        "cost_threshold": 0.01,
+        "model": "mimo-v2.5"
+      },
+      "medium": {
+        "ratio": 0.4,
+        "auto_execute": true,
+        "cost_threshold": 0.05,
+        "model": "mimo-v2.5-pro"
+      },
+      "deep": {
+        "ratio": 0.15,
+        "auto_execute": false,
+        "cost_threshold": 1.0,
+        "model": "claude-sonnet-4.6"
+      },
+      "master": {
+        "ratio": 0.04,
+        "auto_execute": false,
+        "cost_threshold": 5.0,
+        "model": "opus-4.7"
+      },
+      "divine": {
+        "ratio": 0.01,
+        "auto_execute": false,
+        "cost_threshold": 10.0,
+        "model": "opus-4.7+gpt-5.5"
+      }
+    }
+  },
+  "mcp": {
+    "servers": {}
+  },
+  "swarm": {
+    "enabled": false,
+    "max_rounds": 5,
+    "roles": [
+      "architect",
+      "coder",
+      "reviewer"
+    ],
+    "trigger_complexity": "high"
+  }
+}

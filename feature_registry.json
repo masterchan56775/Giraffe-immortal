@@ -1,0 +1,523 @@
+{
+  "features": [
+    {
+      "name": "RouterEngine",
+      "source": "giraffe_native",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P0",
+      "dependencies": []
+    },
+    {
+      "name": "ExecutorPipeline",
+      "source": "giraffe_native",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P0",
+      "dependencies": []
+    },
+    {
+      "name": "MemorySystem",
+      "source": "giraffe_native",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P0",
+      "dependencies": []
+    },
+    {
+      "name": "SelfHealSystem",
+      "source": "giraffe_native",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P0",
+      "dependencies": []
+    },
+    {
+      "name": "CreditMonitor",
+      "source": "giraffe_native",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P0",
+      "dependencies": []
+    },
+    {
+      "name": "SecuritySystem",
+      "source": "giraffe_native",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P0",
+      "dependencies": []
+    },
+    {
+      "name": "ParallelExecutor",
+      "source": "giraffe_native",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P0",
+      "dependencies": []
+    },
+    {
+      "name": "CircuitBreaker",
+      "source": "giraffe_native",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P0",
+      "dependencies": []
+    },
+    {
+      "name": "GuardrailMiddleware",
+      "source": "giraffe_native",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P0",
+      "dependencies": []
+    },
+    {
+      "name": "TaskDecomposer",
+      "source": "giraffe_native",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P0",
+      "dependencies": []
+    },
+    {
+      "name": "StructuredMemory",
+      "source": "giraffe_native",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P0",
+      "dependencies": []
+    },
+    {
+      "name": "AntibodyLibrary",
+      "source": "giraffe_native",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P0",
+      "dependencies": []
+    },
+    {
+      "name": "EvolutionEngine",
+      "source": "giraffe_native",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P0",
+      "dependencies": []
+    },
+    {
+      "name": "IntegrationBridge",
+      "source": "giraffe_native",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P1",
+      "dependencies": []
+    },
+    {
+      "name": "SandboxManager",
+      "source": "giraffe_native",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P1",
+      "dependencies": []
+    },
+    {
+      "name": "WorkflowEngine",
+      "source": "giraffe_native",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P1",
+      "dependencies": []
+    },
+    {
+      "name": "GitHubClient",
+      "source": "giraffe_native",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P1",
+      "dependencies": []
+    },
+    {
+      "name": "AdaptSystem",
+      "source": "giraffe_native",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P1",
+      "dependencies": []
+    },
+    {
+      "name": "ProgressiveLoader",
+      "source": "giraffe_native",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P1",
+      "dependencies": []
+    },
+    {
+      "name": "DeferredToolLoader",
+      "source": "giraffe_native",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P1",
+      "dependencies": []
+    },
+    {
+      "name": "SkillReviewer",
+      "source": "giraffe_native",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P1",
+      "dependencies": []
+    },
+    {
+      "name": "TokenTracker",
+      "source": "giraffe_native",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P1",
+      "dependencies": []
+    },
+    {
+      "name": "CronSync",
+      "source": "giraffe_native",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P1",
+      "dependencies": []
+    },
+    {
+      "name": "HookSystem",
+      "source": "giraffe_native",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P1",
+      "dependencies": []
+    },
+    {
+      "name": "AutoExtract",
+      "source": "giraffe_native",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P1",
+      "dependencies": []
+    },
+    {
+      "name": "SkillCrystallizer",
+      "source": "giraffe_native",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P1",
+      "dependencies": []
+    },
+    {
+      "name": "FaultPlaybook",
+      "source": "giraffe_native",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P1",
+      "dependencies": []
+    },
+    {
+      "name": "ResponseCache",
+      "source": "giraffe_native",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P1",
+      "dependencies": []
+    },
+    {
+      "name": "MicroCompact",
+      "source": "giraffe_native",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P1",
+      "dependencies": []
+    },
+    {
+      "name": "DeepCompact",
+      "source": "giraffe_native",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P1",
+      "dependencies": []
+    },
+    {
+      "name": "file_read",
+      "source": "hermes_builtin",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P0",
+      "dependencies": []
+    },
+    {
+      "name": "file_write",
+      "source": "hermes_builtin",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P0",
+      "dependencies": []
+    },
+    {
+      "name": "file_edit",
+      "source": "hermes_builtin",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P0",
+      "dependencies": []
+    },
+    {
+      "name": "file_search",
+      "source": "hermes_builtin",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P0",
+      "dependencies": []
+    },
+    {
+      "name": "terminal_exec",
+      "source": "hermes_builtin",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P1",
+      "dependencies": []
+    },
+    {
+      "name": "web_search",
+      "source": "hermes_builtin",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P1",
+      "dependencies": []
+    },
+    {
+      "name": "web_fetch",
+      "source": "hermes_builtin",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P1",
+      "dependencies": []
+    },
+    {
+      "name": "code_execute",
+      "source": "hermes_builtin",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P1",
+      "dependencies": [
+        "sandbox"
+      ]
+    },
+    {
+      "name": "git_operation",
+      "source": "hermes_builtin",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P1",
+      "dependencies": []
+    },
+    {
+      "name": "http_request",
+      "source": "hermes_builtin",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P1",
+      "dependencies": []
+    },
+    {
+      "name": "json_parse",
+      "source": "hermes_builtin",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P2",
+      "dependencies": []
+    },
+    {
+      "name": "regex_match",
+      "source": "hermes_builtin",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P2",
+      "dependencies": []
+    },
+    {
+      "name": "diff_compare",
+      "source": "hermes_builtin",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P2",
+      "dependencies": []
+    },
+    {
+      "name": "archive_zip",
+      "source": "hermes_builtin",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P2",
+      "dependencies": []
+    },
+    {
+      "name": "process_manager",
+      "source": "hermes_builtin",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P2",
+      "dependencies": []
+    },
+    {
+      "name": "env_manager",
+      "source": "hermes_builtin",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P2",
+      "dependencies": []
+    },
+    {
+      "name": "package_manager",
+      "source": "hermes_builtin",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P2",
+      "dependencies": []
+    },
+    {
+      "name": "db_query",
+      "source": "hermes_builtin",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P2",
+      "dependencies": []
+    },
+    {
+      "name": "giraffe-full",
+      "source": "hermes_plugin",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P0",
+      "dependencies": []
+    },
+    {
+      "name": "disk-cleanup",
+      "source": "hermes_plugin",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P2",
+      "dependencies": []
+    },
+    {
+      "name": "kanban",
+      "source": "hermes_plugin",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P2",
+      "dependencies": []
+    },
+    {
+      "name": "observability",
+      "source": "hermes_plugin",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P2",
+      "dependencies": []
+    },
+    {
+      "name": "streaming_output",
+      "source": "hermes_display",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P0",
+      "dependencies": []
+    },
+    {
+      "name": "progress_bar",
+      "source": "hermes_display",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P1",
+      "dependencies": []
+    },
+    {
+      "name": "syntax_highlight",
+      "source": "hermes_display",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P1",
+      "dependencies": []
+    },
+    {
+      "name": "markdown_render",
+      "source": "hermes_display",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P1",
+      "dependencies": []
+    },
+    {
+      "name": "theme_engine",
+      "source": "hermes_display",
+      "version": "1.0.0",
+      "fused": true,
+      "fused_at": "2026-05-06",
+      "priority": "P2",
+      "dependencies": []
+    }
+  ],
+  "last_scan": "2026-05-06T16:57:15.264029",
+  "fusion_count": 56,
+  "pending_count": 22,
+  "version": "1.0.0"
+}
