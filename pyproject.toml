@@ -1,0 +1,91 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "giraffe-immortal"
+version = "1.0.0"
+description = "生产级 AI 运行时框架 — DAG 执行引擎 | 多智能体 Swarm | 自愈免疫 | 四层记忆"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+authors = [
+    {name = "Giraffe Team"},
+]
+keywords = ["ai", "agent", "llm", "framework", "runtime", "swarm", "dag"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# 核心依赖
+dependencies = [
+    "opentelemetry-api>=1.20.0",
+    "opentelemetry-sdk>=1.20.0",
+    "opentelemetry-exporter-otlp>=1.20.0",
+    "fastapi>=0.100.0",
+    "uvicorn>=0.23.0",
+    "python-multipart>=0.0.6",
+    "python-dotenv>=1.0.0",
+]
+
+# 可选依赖组
+[project.optional-dependencies]
+vector = [
+    "chromadb>=0.4.0",
+    "sentence-transformers>=2.2.0",
+]
+mcp = [
+    "mcp>=1.0.0",
+]
+all = [
+    "giraffe-immortal[vector,mcp]",
+]
+
+# CLI 入口点 — 安装后可直接运行 `giraffe` 命令
+[project.scripts]
+giraffe = "giraffe:main"
+
+[project.urls]
+Homepage = "https://github.com/giraffe-immortal/giraffe"
+Repository = "https://github.com/giraffe-immortal/giraffe"
+
+# ─── Setuptools 配置 ──────────────────────────────────────────────────────────
+[tool.setuptools]
+# 将 giraffe.py 和 auto_fusion.py 作为独立模块安装
+py-modules = ["giraffe", "auto_fusion"]
+
+[tool.setuptools.packages.find]
+# 自动发现所有子包
+include = [
+    "core*",
+    "router*",
+    "executor*",
+    "graph*",
+    "swarm*",
+    "memory*",
+    "self_heal*",
+    "security*",
+    "integration*",
+    "adapt*",
+    "sandbox*",
+    "workflow*",
+    "skills*",
+    "observability*",
+]
+exclude = ["tests*", "plugins*", "data*"]
+
+# 打包时包含的非 Python 文件
+[tool.setuptools.package-data]
+"*" = ["*.json"]
+
+# ─── pytest 配置 ──────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
