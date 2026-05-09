@@ -1,5 +1,3 @@
-[English](README_en.md) | [中文](README_zh.md)
-
 # Giraffe — AI Runtime Framework
 
 Welcome to the Giraffe AI framework. Please select your language:
