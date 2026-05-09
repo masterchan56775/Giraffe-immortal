@@ -1,6 +1,6 @@
 # Giraffe — Production-Grade AI Runtime Framework
 
-DAG Execution Engine | Multi-Agent Swarm | Full-Stack Telemetry | 4-Tier Memory | Self-Healing Immunity | Semantic Retrieval
+DAG Execution Engine | Multi-Agent Swarm | Full-Stack Telemetry | Multi-Tier Memory | Self-Healing Immunity | Semantic Retrieval
 
 ---
 
@@ -140,7 +140,7 @@ When the routing engine determines a task's complexity is `high` (e.g., large-sc
 - **Coder**: Writes code based on the design (Temperature 0.2).
 - **Reviewer**: Checks quality and security, outputting APPROVED or feedback (Temperature 0.1).
 
-### 4-Tier Memory System (`memory/`)
+### Multi-Tier Memory System (`memory/`)
 
 | Tier | Medium | Lifecycle | Purpose |
 |------|--------|-----------|---------|
