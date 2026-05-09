@@ -7,15 +7,14 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from datetime import datetime
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
 # 估算每1000 token成本（USD）—— 仅用于预算估算
 MODEL_COST_PER_1K: dict[str, float] = {
-    "mimo-v2.5":        0.0005,
-    "mimo-v2.5-pro":    0.001,
-    "mimo-v2-flash":    0.0002,
+    "gemini-3-flash-preview":    0.0005,
+    "gemini-3.1-pro-preview":      0.001,
+    "gemini-3.1-flash-lite":    0.0002,
     "claude-haiku-4.5": 0.00025,
     "claude-sonnet-4.6":0.003,
     "opus-4.7":         0.015,

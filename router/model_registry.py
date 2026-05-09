@@ -34,20 +34,20 @@ class ModelConfig:
 
 # 默认模型矩阵（9种任务 × 3级）
 DEFAULT_MODEL_MATRIX: dict[str, dict[ModelLevel, str]] = {
-    "chat":            {"primary": "mimo-v2.5",      "fallback": "mimo-v2.5",        "emergency": "mimo-v2-flash"},
-    "code_small":      {"primary": "mimo-v2.5-pro",  "fallback": "mimo-v2.5",        "emergency": "mimo-v2.5"},
-    "code_medium":     {"primary": "mimo-v2.5",      "fallback": "claude-haiku-4.5", "emergency": "mimo-v2.5-pro"},
-    "code_large":      {"primary": "claude-sonnet-4.6", "fallback": "mimo-v2.5",     "emergency": "claude-haiku-4.5"},
-    "reasoning_light": {"primary": "mimo-v2.5",      "fallback": "mimo-v2.5",        "emergency": "claude-haiku-4.5"},
-    "reasoning":       {"primary": "opus-4.7",       "fallback": "claude-sonnet-4.6","emergency": "gpt-5.5"},
-    "vision":          {"primary": "mimo-v2-omni",   "fallback": "gemini-3-flash",   "emergency": "claude-sonnet-4.6"},
-    "routing":         {"primary": "mimo-v2-flash",  "fallback": "mimo-v2.5",        "emergency": "mimo-v2.5"},
-    "subtask":         {"primary": "mimo-v2.5",      "fallback": "mimo-v2.5",        "emergency": "mimo-v2-flash"},
+    "chat":            {"primary": "gemini-3-flash-preview",  "fallback": "gemini-3-flash-preview",  "emergency": "gemini-3.1-flash-lite"},
+    "code_small":      {"primary": "gemini-3.1-pro-preview",    "fallback": "gemini-3-flash-preview",  "emergency": "gemini-3-flash-preview"},
+    "code_medium":     {"primary": "gemini-3-flash-preview",  "fallback": "claude-haiku-4.5",  "emergency": "gemini-3.1-pro-preview"},
+    "code_large":      {"primary": "claude-sonnet-4.6", "fallback": "gemini-3-flash-preview",  "emergency": "claude-haiku-4.5"},
+    "reasoning_light": {"primary": "gemini-3-flash-preview",  "fallback": "gemini-3-flash-preview",  "emergency": "claude-haiku-4.5"},
+    "reasoning":       {"primary": "opus-4.7",          "fallback": "claude-sonnet-4.6", "emergency": "gpt-5.5"},
+    "vision":          {"primary": "gemini-3.1-flash-lite",  "fallback": "gemini-3-flash-preview",  "emergency": "claude-sonnet-4.6"},
+    "routing":         {"primary": "gemini-3.1-flash-lite",  "fallback": "gemini-3-flash-preview",  "emergency": "gemini-3-flash-preview"},
+    "subtask":         {"primary": "gemini-3-flash-preview",  "fallback": "gemini-3-flash-preview",  "emergency": "gemini-3.1-flash-lite"},
 }
 
 # 子Agent路由矩阵
 SUBAGENT_MATRIX: dict[str, str] = {
-    "text_reasoning": "mimo-v2.5",
+    "text_reasoning": "gemini-3-flash-preview",
     "code":           "claude-sonnet-4.6",
     "deep_reasoning": "claude-opus-4.7",
     "multi_model":    "opus-4.7+gpt-5.5",
@@ -91,20 +91,20 @@ class ModelRegistry:
     def get_model(self, task_type: str, level: ModelLevel = "primary") -> str:
         """获取指定任务类型和降级级别的模型名称。"""
         task_matrix = self._matrix.get(task_type, self._matrix["chat"])
-        return task_matrix.get(level, task_matrix.get("primary", "mimo-v2.5"))
+        return task_matrix.get(level, task_matrix.get("primary", "gemini-3-flash-preview"))
 
     def get_model_chain(self, task_type: str) -> list[str]:
         """返回完整的降级链：[primary, fallback, emergency]。"""
         task_matrix = self._matrix.get(task_type, self._matrix["chat"])
         return [
-            task_matrix.get("primary", "mimo-v2.5"),
-            task_matrix.get("fallback", "mimo-v2.5"),
-            task_matrix.get("emergency", "mimo-v2-flash"),
+            task_matrix.get("primary", "gemini-3-flash-preview"),
+            task_matrix.get("fallback", "gemini-3-flash-preview"),
+            task_matrix.get("emergency", "gemini-3.1-flash-lite"),
         ]
 
     def get_subagent_model(self, subagent_type: str) -> str:
         """获取子Agent的模型。"""
-        return self._subagent_matrix.get(subagent_type, "mimo-v2.5")
+        return self._subagent_matrix.get(subagent_type, "gemini-3-flash-preview")
 
     def get_model_config(self, model_name: str) -> ModelConfig:
         """获取模型的完整配置。"""

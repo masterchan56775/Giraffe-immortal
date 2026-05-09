@@ -4,7 +4,6 @@ ComplexityEstimator — 复杂度评估器
 """
 from __future__ import annotations
 
-import re
 from enum import Enum
 from typing import NamedTuple
 

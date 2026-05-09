@@ -33,8 +33,8 @@ class TierConfig:
 
 # 五档配置
 TIER_CONFIGS: dict[RouteTier, TierConfig] = {
-    RouteTier.NANO:   TierConfig(RouteTier.NANO,   0.40, True,  0.01, "mimo-v2.5",        "nano: auto"),
-    RouteTier.LOW:    TierConfig(RouteTier.LOW,    0.40, True,  0.05, "mimo-v2.5-pro",    "low: auto"),
+    RouteTier.NANO:   TierConfig(RouteTier.NANO,   0.40, True,  0.01, "gemini-3-flash-preview",  "nano: auto"),
+    RouteTier.LOW:    TierConfig(RouteTier.LOW,    0.40, True,  0.05, "gemini-3.1-pro-preview",    "low: auto"),
     RouteTier.MEDIUM: TierConfig(RouteTier.MEDIUM, 0.15, False, 1.00, "claude-sonnet-4.6","medium: confirm"),
     RouteTier.HIGH:   TierConfig(RouteTier.HIGH,   0.04, False, 5.00, "opus-4.7",         "high: confirm"),
     RouteTier.XHIGH:  TierConfig(RouteTier.XHIGH,  0.01, False,10.00, "opus-4.7+gpt-5.5", "xhigh: confirm"),

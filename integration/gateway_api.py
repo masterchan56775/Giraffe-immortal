@@ -69,7 +69,7 @@ class GatewayAPI:
         """一次调用返回模型+运行时配置。"""
         if self._router:
             return self._router.route_and_get_runtime(message, has_image)
-        return "mimo-v2.5", {"task_type": "chat", "auto_execute": True}
+        return "gemini-3-flash-preview", {"task_type": "chat", "auto_execute": True}
 
     def send_message(self, platform: str, content: str, **kwargs) -> bool:
         """向指定平台发送消息。"""

@@ -6,11 +6,12 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass, field
 
-from .intent_classifier import IntentClassifier, TaskType, ClassifyResult
+from dataclasses import dataclass
+from .intent_classifier import IntentClassifier
+from .gatekeeper import Gatekeeper
+from .intent_classifier import TaskType
 from .query_complexity import ComplexityEstimator, ComplexityLevel
-from .gatekeeper import Gatekeeper, RouteTier, GatekeeperResult
 from .llm_classifier import LLMClassifier
 from .model_registry import ModelRegistry
 from .subagent_router import SubAgentRouter
@@ -94,7 +95,7 @@ class RouterEngine:
         if cfg.get("llm_fallback", True):
             primary = cfg.get("primary_model", {})
             self._llm_clf = LLMClassifier(
-                model=cfg.get("routing_model", "mimo-v2-flash"),
+                model=cfg.get("routing_model", "gemini-3.1-flash-lite"),
                 api_key=primary.get("api_key", ""),
                 base_url=primary.get("base_url", ""),
             )

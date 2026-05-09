@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +73,6 @@ def create_app():
             message: 用户消息文本
             images: 可选的图片文件列表（multipart/form-data）
         """
-        bus = EventBus.get()
 
         # 处理上传图片
         encoded_images: list[str] = []

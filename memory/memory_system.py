@@ -8,7 +8,6 @@ import json
 import logging
 import sqlite3
 from pathlib import Path
-from typing import Any
 
 from .auto_extract import AutoExtract
 from .diary import Diary

@@ -69,13 +69,8 @@ class MCPClient:
 
         try:
             if self._transport == "stdio" and self._command:
-                from mcp import ClientSession, StdioServerParameters
-                from mcp.client.stdio import stdio_client
 
-                server_params = StdioServerParameters(
-                    command=self._command,
-                    args=self._args,
-                )
+                pass
                 # 注意：实际连接需要在 async context manager 中保持活跃
                 # 这里先标记为已配置，实际调用时再建立连接
                 self._connected = True

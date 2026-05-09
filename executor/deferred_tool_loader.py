@@ -5,7 +5,6 @@ DeferredToolLoader — 延迟工具加载器
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
 

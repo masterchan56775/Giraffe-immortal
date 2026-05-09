@@ -185,7 +185,7 @@ class APICallNode(Node):
         # 构建 ExecutionContext（复用 pipeline 的 _build_messages 逻辑）
         ctx = ExecutionContext(
             message=state.get("message", ""),
-            model=state.get("model", "mimo-v2.5"),
+            model=state.get("model", "gemini-3-flash-preview"),
             api_key=state.get("api_key", ""),
             base_url=state.get("base_url", ""),
             task_type=state.get("task_type", "chat"),

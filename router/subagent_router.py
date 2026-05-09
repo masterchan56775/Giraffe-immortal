@@ -15,20 +15,20 @@ logger = logging.getLogger(__name__)
 
 
 class SubAgentType(str, Enum):
-    TEXT_REASONING = "text_reasoning"    # 纯文本推理 → mimo-v2.5
+    TEXT_REASONING = "text_reasoning"    # 纯文本推理 → gemini-3-flash-preview
     CODE           = "code"              # 代码任务 → claude-sonnet-4.6
     DEEP_REASONING = "deep_reasoning"    # 深度推理 → claude-opus-4.7
     MULTI_MODEL    = "multi_model"       # 多模型协作 → opus+gpt-5.5
-    VISION         = "vision"            # 视觉任务 → mimo-v2-omni
+    VISION         = "vision"            # 视觉任务 → gemini-3.1-flash-lite
 
 
 # 子Agent类型 → 推荐模型
 SUBAGENT_MODEL_MAP: dict[SubAgentType, str] = {
-    SubAgentType.TEXT_REASONING: "mimo-v2.5",
+    SubAgentType.TEXT_REASONING: "gemini-3-flash-preview",
     SubAgentType.CODE:           "claude-sonnet-4.6",
     SubAgentType.DEEP_REASONING: "claude-opus-4.7",
     SubAgentType.MULTI_MODEL:    "opus-4.7+gpt-5.5",
-    SubAgentType.VISION:         "mimo-v2-omni",
+    SubAgentType.VISION:         "gemini-3.1-flash-lite",
 }
 
 # 任务类型 → 子Agent类型

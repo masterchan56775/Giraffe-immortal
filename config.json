@@ -88,35 +88,35 @@
     "complexity_estimation": true,
     "llm_fallback": true,
     "primary_model": {
-      "provider": "xiaomi",
-      "model": "mimo-v2.5",
-      "api_key": "${MIMO_API_KEY}",
-      "base_url": "https://token-plan-cn.xiaomimimo.com/v1"
+      "provider": "vertex_ai",
+      "model": "gemini-3-flash-preview",
+      "project": "YOUR_PROJECT_ID",
+      "location": "us-central1"
     },
     "model_matrix": {
       "chat": {
-        "primary": "mimo-v2.5",
-        "fallback": "mimo-v2.5",
-        "emergency": "mimo-v2-flash"
+        "primary": "gemini-3-flash-preview",
+        "fallback": "gemini-3-flash-preview",
+        "emergency": "gemini-3.1-flash-lite"
       },
       "code_small": {
-        "primary": "mimo-v2.5-pro",
-        "fallback": "mimo-v2.5",
-        "emergency": "mimo-v2.5"
+        "primary": "gemini-3.1-pro-preview",
+        "fallback": "gemini-3-flash-preview",
+        "emergency": "gemini-3-flash-preview"
       },
       "code_medium": {
-        "primary": "mimo-v2.5",
+        "primary": "gemini-3-flash-preview",
         "fallback": "claude-haiku-4.5",
-        "emergency": "mimo-v2.5-pro"
+        "emergency": "gemini-3.1-pro-preview"
       },
       "code_large": {
         "primary": "claude-sonnet-4.6",
-        "fallback": "mimo-v2.5",
+        "fallback": "gemini-3-flash-preview",
         "emergency": "claude-haiku-4.5"
       },
       "reasoning_light": {
-        "primary": "mimo-v2.5",
-        "fallback": "mimo-v2.5",
+        "primary": "gemini-3-flash-preview",
+        "fallback": "gemini-3-flash-preview",
         "emergency": "claude-haiku-4.5"
       },
       "reasoning": {
@@ -125,19 +125,19 @@
         "emergency": "gpt-5.5"
       },
       "vision": {
-        "primary": "mimo-v2-omni",
-        "fallback": "gemini-3-flash",
+        "primary": "gemini-3.1-flash-lite",
+        "fallback": "gemini-3-flash-preview",
         "emergency": "claude-sonnet-4.6"
       },
       "routing": {
-        "primary": "mimo-v2-flash",
-        "fallback": "mimo-v2.5",
-        "emergency": "mimo-v2.5"
+        "primary": "gemini-3.1-flash-lite",
+        "fallback": "gemini-3-flash-preview",
+        "emergency": "gemini-3-flash-preview"
       },
       "subtask": {
-        "primary": "mimo-v2.5",
-        "fallback": "mimo-v2.5",
-        "emergency": "mimo-v2-flash"
+        "primary": "gemini-3-flash-preview",
+        "fallback": "gemini-3-flash-preview",
+        "emergency": "gemini-3.1-flash-lite"
       }
     },
     "circuit_breaker": {
@@ -146,31 +146,31 @@
       "half_open_max_calls": 1
     },
     "tiers": {
-      "daily": {
+      "nano": {
         "ratio": 0.4,
         "auto_execute": true,
         "cost_threshold": 0.01,
-        "model": "mimo-v2.5"
+        "model": "gemini-3-flash-preview"
       },
-      "medium": {
+      "low": {
         "ratio": 0.4,
         "auto_execute": true,
         "cost_threshold": 0.05,
-        "model": "mimo-v2.5-pro"
+        "model": "gemini-3.1-pro-preview"
       },
-      "deep": {
+      "medium": {
         "ratio": 0.15,
         "auto_execute": false,
         "cost_threshold": 1.0,
         "model": "claude-sonnet-4.6"
       },
-      "master": {
+      "high": {
         "ratio": 0.04,
         "auto_execute": false,
         "cost_threshold": 5.0,
         "model": "opus-4.7"
       },
-      "divine": {
+      "xhigh": {
         "ratio": 0.01,
         "auto_execute": false,
         "cost_threshold": 10.0,

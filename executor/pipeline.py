@@ -5,16 +5,11 @@ ExecutorPipeline — 执行管道主文件
 """
 from __future__ import annotations
 
-import json
 import logging
 import time
-import urllib.error
-import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
-from .circuit_breaker import CircuitBreaker, CircuitBreakerRegistry, CircuitOpenError
 from .deep_compact import DeepCompact
 from .micro_compact import MicroCompact
 from .parallel_executor import ParallelSubAgentExecutor
@@ -313,7 +308,6 @@ class ExecutorPipeline:
     # ─── 各阶段实现 ────────────────────────────────────────────────────────────
     def _stage_decompose(self, ctx: ExecutionContext):
         """阶段1：任务分解。返回 (ctx, DecomposedTask|None)。"""
-        from .task_decomposer import DecomposedTask
         t = time.perf_counter()
         result = self._decomposer.decompose(ctx.message, ctx.task_type)
         if result.is_complex:
@@ -400,42 +394,95 @@ class ExecutorPipeline:
         return msgs
 
     def _call_api(self, ctx: ExecutionContext, messages: list[dict]) -> str:
-        """实际调用API（OpenAI兼容协议）。"""
-        if not ctx.api_key or not ctx.base_url or ctx.api_key.startswith("${"):
-            # 无API配置时返回模拟响应
-            return f"[Giraffe模拟响应] 模型:{ctx.model} | 消息:{ctx.message[:50]}..."
+        """实际调用API，根据配置选择 ADC 认证或 OpenAI API Key 认证。"""
+        use_adc = not ctx.api_key or ctx.api_key.startswith("${")
 
-        payload = {
-            "model": ctx.model,
-            "messages": messages,
-            "max_tokens": ctx.max_tokens,
-            "temperature": ctx.temperature,
-        }
-        # 注入 MCP 工具
-        if ctx.mcp_tools:
-            payload["tools"] = ctx.mcp_tools
-        data = json.dumps(payload).encode("utf-8")
-        url = f"{ctx.base_url.rstrip('/')}/chat/completions"
-        req = urllib.request.Request(
-            url,
-            data=data,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {ctx.api_key}",
-            },
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                resp_data = json.loads(resp.read().decode("utf-8"))
+        if use_adc:
+            try:
+                from google import genai
+                from google.genai import types
+            except ImportError:
+                return f"[Giraffe模拟响应] 缺少 google-genai | 模型:{ctx.model} | 消息:{ctx.message[:50]}..."
+
+            contents = []
+            system_instruction = None
+            for m in messages:
+                role = m.get("role")
+                content = m.get("content", "")
+                if role == "system":
+                    system_instruction = content
+                    continue
+                
+                gemini_role = "model" if role == "assistant" else "user"
+                if isinstance(content, list):
+                    parts = []
+                    for p in content:
+                        if p.get("type") == "text":
+                            parts.append(types.Part.from_text(p["text"]))
+                        # TODO: 处理多模态图片映射
+                    if parts:
+                        contents.append(types.Content(role=gemini_role, parts=parts))
+                else:
+                    contents.append(types.Content(role=gemini_role, parts=[types.Part.from_text(str(content))]))
+
+            try:
+                client = genai.Client(vertexai=True)
+                config = types.GenerateContentConfig(
+                    temperature=ctx.temperature,
+                    max_output_tokens=ctx.max_tokens,
+                    system_instruction=system_instruction,
+                )
+                response = client.models.generate_content(
+                    model=ctx.model,
+                    contents=contents,
+                    config=config,
+                )
+                
                 # 检查信用状态
                 if self._credit_monitor:
                     self._credit_monitor.check_credit(200, ctx.model)
-                return resp_data["choices"][0]["message"]["content"]
-        except urllib.error.HTTPError as e:
-            if self._credit_monitor:
-                self._credit_monitor.check_credit(e.code, ctx.model)
-            raise
+                return response.text
+            except Exception as e:
+                try:
+                    from google.api_core.exceptions import GoogleAPIError
+                    if isinstance(e, GoogleAPIError) and self._credit_monitor:
+                        self._credit_monitor.check_credit(getattr(e, 'code', 500), ctx.model)
+                except ImportError:
+                    pass
+                raise
+        else:
+            # 兼容 OpenAI 协议的 API Key 调用
+            import json, urllib.request, urllib.error
+            payload = {
+                "model": ctx.model,
+                "messages": messages,
+                "max_tokens": ctx.max_tokens,
+                "temperature": ctx.temperature,
+            }
+            if getattr(ctx, 'mcp_tools', None):
+                payload["tools"] = ctx.mcp_tools
+            data = json.dumps(payload).encode("utf-8")
+            base_url = getattr(ctx, 'base_url', '') or 'https://api.openai.com/v1'
+            url = f"{base_url.rstrip('/')}/chat/completions"
+            req = urllib.request.Request(
+                url,
+                data=data,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {ctx.api_key}",
+                },
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    resp_data = json.loads(resp.read().decode("utf-8"))
+                    if self._credit_monitor:
+                        self._credit_monitor.check_credit(200, ctx.model)
+                    return resp_data["choices"][0]["message"]["content"]
+            except urllib.error.HTTPError as e:
+                if self._credit_monitor:
+                    self._credit_monitor.check_credit(e.code, ctx.model)
+                raise
 
     def _stage_parallel_execute(self, ctx: ExecutionContext, decomposed) -> ExecutionContext:
         """阶段8（多子任务路径）：并行调用 API 执行每个子任务，聚合结果。"""

@@ -146,7 +146,6 @@ class ErrorProcessor:
         # ── 步骤6：执行修复 ───────────────────────────────────────────────
         resolved = False
         if ab_match.antibody:
-            fix_steps = ab_match.antibody.fix_steps
             log_step(6, "执行修复", f"应用抗体: {ab_match.antibody.name}")
             # 实际修复：如有 retry_func 且是超时/限流类错误，尝试重试
             if retry_func and category in (ErrorCategory.NETWORK, ErrorCategory.RATE_LIMIT):

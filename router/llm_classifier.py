@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
 
 from .intent_classifier import ClassifyResult, TaskType
 
@@ -37,7 +36,7 @@ class LLMClassifier:
 
     def __init__(
         self,
-        model: str = "mimo-v2-flash",
+        model: str = "gemini-3.1-flash-lite",
         api_key: str = "",
         base_url: str = "",
         timeout: float = 5.0,
@@ -65,30 +64,69 @@ class LLMClassifier:
         return result
 
     def _call_llm(self, message: str) -> ClassifyResult:
-        """实际调用LLM（需要API Key和base_url配置）。"""
-        if not self._api_key or not self._base_url or self._api_key.startswith("${"):
-            logger.warning("[LLMClassifier] 未配置真实API Key或base_url，返回默认分类")
-            return ClassifyResult(
-                task_type=TaskType.CHAT,
-                confidence=0.5,
-                method="llm_unavailable",
-            )
+        """实际调用LLM，根据配置选择 ADC 认证或 OpenAI API Key 认证。"""
+        # 判断是否使用 ADC 认证
+        use_adc = not self._api_key or self._api_key.startswith("${")
 
-        try:
+        if use_adc:
+            try:
+                from google import genai
+                from google.genai import types
+            except ImportError:
+                logger.error("[LLMClassifier] 缺少 google-genai 依赖，无法执行慢路径路由")
+                return ClassifyResult(
+                    task_type=TaskType.CHAT,
+                    confidence=0.5,
+                    method="llm_unavailable",
+                )
+
+            try:
+                # 自动使用 ADC 凭据
+                client = genai.Client(vertexai=True)
+                response = client.models.generate_content(
+                    model=self._model,
+                    contents=f"请分类这条消息：{message}",
+                    config=types.GenerateContentConfig(
+                        system_instruction=CLASSIFY_SYSTEM_PROMPT,
+                        temperature=0.1,
+                        max_output_tokens=100,
+                        response_mime_type="application/json",
+                    )
+                )
+                content = response.text
+                parsed = json.loads(content)
+                task_type = TaskType(parsed.get("task_type", "chat"))
+                confidence = float(parsed.get("confidence", 0.8))
+                return ClassifyResult(
+                    task_type=task_type,
+                    confidence=confidence,
+                    method="llm_adc",
+                )
+            except Exception as e:
+                logger.error(f"[LLMClassifier] ADC 调用失败: {e}")
+                return ClassifyResult(
+                    task_type=TaskType.CHAT,
+                    confidence=0.4,
+                    method="llm_error",
+                )
+        else:
+            # 兼容 OpenAI 协议的 API Key 调用
             import urllib.request
             import urllib.error
-
+            
             payload = {
                 "model": self._model,
                 "messages": [
                     {"role": "system", "content": CLASSIFY_SYSTEM_PROMPT},
-                    {"role": "user", "content": f"请分类这条消息：{message}"},
+                    {"role": "user", "content": f"请分类这条消息：{message}"}
                 ],
-                "max_tokens": 100,
                 "temperature": 0.1,
+                "max_tokens": 100,
+                "response_format": {"type": "json_object"}
             }
             data = json.dumps(payload).encode("utf-8")
-            url = f"{self._base_url.rstrip('/')}/chat/completions"
+            base_url = self._base_url or "https://api.openai.com/v1"
+            url = f"{base_url.rstrip('/')}/chat/completions"
             req = urllib.request.Request(
                 url,
                 data=data,
@@ -98,24 +136,25 @@ class LLMClassifier:
                 },
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=self._timeout) as resp:
-                resp_data = json.loads(resp.read().decode("utf-8"))
-                content = resp_data["choices"][0]["message"]["content"]
-                parsed = json.loads(content)
-                task_type = TaskType(parsed.get("task_type", "chat"))
-                confidence = float(parsed.get("confidence", 0.8))
+            try:
+                with urllib.request.urlopen(req, timeout=self._timeout) as resp:
+                    resp_data = json.loads(resp.read().decode("utf-8"))
+                    content = resp_data["choices"][0]["message"]["content"]
+                    parsed = json.loads(content)
+                    task_type = TaskType(parsed.get("task_type", "chat"))
+                    confidence = float(parsed.get("confidence", 0.8))
+                    return ClassifyResult(
+                        task_type=task_type,
+                        confidence=confidence,
+                        method="llm_apikey",
+                    )
+            except Exception as e:
+                logger.error(f"[LLMClassifier] API Key 调用失败: {e}")
                 return ClassifyResult(
-                    task_type=task_type,
-                    confidence=confidence,
-                    method="llm",
+                    task_type=TaskType.CHAT,
+                    confidence=0.4,
+                    method="llm_error",
                 )
-        except Exception as e:
-            logger.error(f"[LLMClassifier] 调用失败: {e}")
-            return ClassifyResult(
-                task_type=TaskType.CHAT,
-                confidence=0.4,
-                method="llm_error",
-            )
 
     @property
     def call_count(self) -> int:

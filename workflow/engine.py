@@ -5,7 +5,6 @@ WorkflowEngine — 工作流引擎
 from __future__ import annotations
 import json, logging, uuid
 from pathlib import Path
-from typing import Any, Callable
 from .step import WorkflowStep, StepStatus
 logger = logging.getLogger(__name__)
 

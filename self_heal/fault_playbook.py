@@ -7,7 +7,6 @@ from __future__ import annotations
 import logging
 import time
 from enum import Enum
-from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +49,7 @@ class NetworkFaultHandler(FaultHandler):
 
             if retry_func:
                 try:
-                    resp = retry_func()
+                    retry_func()
                     result["success"] = True
                     result["response"] = resp
                     break
@@ -86,7 +85,7 @@ class ApiErrorHandler(FaultHandler):
 
             if retry_func:
                 try:
-                    resp = retry_func()
+                    retry_func()
                     result["success"] = True
                     result["model_used"] = model
                     break
@@ -125,7 +124,7 @@ class ResourceFaultHandler(FaultHandler):
 
         if retry_func:
             try:
-                resp = retry_func()
+                retry_func()
                 result["success"] = True
                 result["steps"].append("压缩后重试成功")
             except Exception as e:
