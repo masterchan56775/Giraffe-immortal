@@ -182,35 +182,61 @@ class APICallNode(Node):
                 self._record(state, "api_call", t)
                 return state
 
-        # 构建 ExecutionContext（复用 pipeline 的 _build_messages 逻辑）
-        ctx = ExecutionContext(
-            message=state.get("message", ""),
-            model=state.get("model", "gemini-3-flash-preview"),
-            api_key=state.get("api_key", ""),
-            base_url=state.get("base_url", ""),
-            task_type=state.get("task_type", "chat"),
-            messages=list(state.get("messages", [])),
-            system_prompt=state.get("system_prompt", ""),
-            images=list(state.get("images", [])),
-            mcp_tools=list(state.get("mcp_tools", [])),
-            max_tokens=state.get("max_tokens", 2048),
-            temperature=state.get("temperature", 0.7),
-        )
-        messages = self._pipeline._build_messages(ctx)
+        def _build_ctx(model: str) -> tuple["ExecutionContext", list]:
+            """为指定模型构建 ExecutionContext 和 messages。"""
+            ctx = ExecutionContext(
+                message=state.get("message", ""),
+                model=model,
+                api_key=state.get("api_key", ""),
+                base_url=state.get("base_url", ""),
+                task_type=state.get("task_type", "chat"),
+                messages=list(state.get("messages", [])),
+                system_prompt=state.get("system_prompt", ""),
+                images=list(state.get("images", [])),
+                mcp_tools=list(state.get("mcp_tools", [])),
+                max_tokens=state.get("max_tokens", 4096),
+                temperature=state.get("temperature", 0.7),
+            )
+            return ctx, self._pipeline._build_messages(ctx)
 
-        try:
-            breaker = self._pipeline._breaker_registry.get_breaker(ctx.model)
-            response = breaker.call(self._pipeline._call_api, ctx, messages)
-            state["response"] = response
-            state["error"] = None
-            breaker.record_success()
-        except Exception as e:
-            state["error"] = str(e)
+        # 完整的模型尝试链：primary → fallback → emergency
+        primary_model = state.get("model", "gemini-3-flash-preview")
+        fallback_models = [m for m in state.get("fallback_models", []) if m and m != primary_model]
+        model_try_chain = [primary_model] + fallback_models
+
+        last_error = None
+        for attempt_model in model_try_chain:
+            ctx, messages = _build_ctx(attempt_model)
+            try:
+                breaker = self._pipeline._breaker_registry.get_breaker(attempt_model)
+                response = breaker.call(self._pipeline._call_api, ctx, messages)
+                state["response"] = response
+                state["error"] = None
+                state["truncated"] = getattr(ctx, "truncated", False)
+                state["model"] = attempt_model  # 记录实际使用的模型
+                breaker.record_success()
+                if attempt_model != primary_model:
+                    logger.warning(
+                        f"[APICallNode] 已降级: {primary_model} → {attempt_model}"
+                    )
+                break  # 成功，跳出循环
+            except Exception as e:
+                last_error = e
+                logger.warning(
+                    f"[APICallNode] 模型 {attempt_model} 失败: {e!s:.120}"
+                )
+                if attempt_model != model_try_chain[-1]:
+                    logger.info(f"[APICallNode] 尝试下一个模型...")
+        else:
+            # 所有模型均失败
+            state["error"] = str(last_error)
             state["response"] = ""
-            logger.error(f"[APICallNode] API 调用失败: {e}")
+            state["truncated"] = False
+            logger.error(f"[APICallNode] 所有模型均失败，最后错误: {last_error}")
 
         self._record(state, "api_call", t)
         return state
+
 
 
 class SelfHealNode(Node):
@@ -231,14 +257,22 @@ class SelfHealNode(Node):
         retry_count = state.get("retry_count", 0)
 
         if error and self._error_processor:
+            # 从错误消息提取 HTTP 状态码
+            import re as _re
+            _http_code = 0
+            _m = _re.search(r"(?:^|\s)([45]\d{2})\b|'code':\s*([45]\d{2})", str(error))
+            if _m:
+                _http_code = int(_m.group(1) or _m.group(2))
             report = self._error_processor.process(
                 error=error,
+                http_code=_http_code,
                 model=state.get("model", ""),
                 model_chain=self._model_chain,
             )
-            # 如果错误处理建议切换模型
-            if report.recovery_action and report.recovery_action.get("type") == "switch_model":
-                new_model = report.recovery_action.get("model", "")
+            # process() 返回 dict，用 .get() 访问（原来错误地用了 report.recovery_action 属性）
+            recovery = report.get("recovery_action") if isinstance(report, dict) else None
+            if recovery and recovery.get("type") == "switch_model":
+                new_model = recovery.get("model", "")
                 if new_model:
                     state["model"] = new_model
                     logger.info(f"[SelfHealNode] 切换模型: {new_model}")

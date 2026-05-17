@@ -49,9 +49,11 @@ TASK_TIER_MAP: dict[TaskType, RouteTier] = {
     TaskType.REASONING_LIGHT: RouteTier.LOW,
     TaskType.REASONING:       RouteTier.HIGH,
     TaskType.VISION:          RouteTier.LOW,
-    TaskType.SEARCH:          RouteTier.NANO,
+    TaskType.SEARCH:          RouteTier.LOW,
     TaskType.ROUTING:         RouteTier.NANO,
     TaskType.SUBTASK:         RouteTier.NANO,
+    TaskType.AGENT_TASK:      RouteTier.XHIGH,  # 自动化 Agent → xhigh 辩论档
+    TaskType.REPO_ANALYSIS:   RouteTier.HIGH,   # 长仓库分析 → high
 }
 
 
@@ -119,15 +121,19 @@ class Gatekeeper:
         """综合任务类型和复杂度确定档位。"""
         base_tier = TASK_TIER_MAP.get(task_type, RouteTier.NANO)
 
+        tier_order = [RouteTier.NANO, RouteTier.LOW, RouteTier.MEDIUM,
+                      RouteTier.HIGH, RouteTier.XHIGH]
+
         # 复杂度提升档位
-        if complexity_level in (ComplexityLevel.EXTREME,):
-            # 极复杂：至少提升到 HIGH
-            if base_tier in (RouteTier.NANO, RouteTier.LOW, RouteTier.MEDIUM):
-                return RouteTier.HIGH
+        if complexity_level == ComplexityLevel.EXTREME:
+            # 极复杂：至少提升到 XHIGH（确保 reasoning+EXTREME 能触发辩论）
+            idx = tier_order.index(base_tier)
+            target = max(idx, tier_order.index(RouteTier.HIGH))
+            # EXTREME 比 COMPLEX 多提升一档
+            target = min(target + 1, len(tier_order) - 1)
+            return tier_order[target]
         elif complexity_level == ComplexityLevel.COMPLEX:
             # 复杂：提升一档
-            tier_order = [RouteTier.NANO, RouteTier.LOW, RouteTier.MEDIUM,
-                          RouteTier.HIGH, RouteTier.XHIGH]
             idx = tier_order.index(base_tier)
             if idx < len(tier_order) - 1:
                 return tier_order[idx + 1]

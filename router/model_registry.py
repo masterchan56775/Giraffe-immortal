@@ -1,15 +1,20 @@
 """
 ModelRegistry — 模型注册表
 维护 9种任务类型 × 3级降级 的完整模型矩阵
+集成别名解析（haiku/sonnet/opus/flash/grok/[1m]...)
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Literal
-
+from router.model_aliases import (
+    parse_model_alias, get_canonical_name, get_api_provider,
+    get_default_sonnet_model, get_small_fast_model,
+    is_model_alias, MODEL_ALIASES,
+)
 
 ModelLevel = Literal["primary", "fallback", "emergency"]
-
 
 @dataclass
 class ModelConfig:
@@ -31,18 +36,29 @@ class ModelConfig:
             "temperature": self.temperature,
         }
 
-
-# 默认模型矩阵（9种任务 × 3级）
+# 默认模型矩阵
+# 路由设计：
+#   Grok  (grok-4.20-reasoning)    ← agent_task, repo_analysis, search
+#   Claude (claude-sonnet-4-6)     ← reasoning, code_large
+#   Gemini (其他所有)              ← chat, code_small, code_medium, reasoning_light, vision
 DEFAULT_MODEL_MATRIX: dict[str, dict[ModelLevel, str]] = {
-    "chat":            {"primary": "gemini-3-flash-preview",  "fallback": "gemini-3-flash-preview",  "emergency": "gemini-3.1-flash-lite"},
-    "code_small":      {"primary": "gemini-3.1-pro-preview",    "fallback": "gemini-3-flash-preview",  "emergency": "gemini-3-flash-preview"},
-    "code_medium":     {"primary": "gemini-3-flash-preview",  "fallback": "claude-haiku-4.5",  "emergency": "gemini-3.1-pro-preview"},
-    "code_large":      {"primary": "claude-sonnet-4.6", "fallback": "gemini-3-flash-preview",  "emergency": "claude-haiku-4.5"},
-    "reasoning_light": {"primary": "gemini-3-flash-preview",  "fallback": "gemini-3-flash-preview",  "emergency": "claude-haiku-4.5"},
-    "reasoning":       {"primary": "opus-4.7",          "fallback": "claude-sonnet-4.6", "emergency": "gpt-5.5"},
-    "vision":          {"primary": "gemini-3.1-flash-lite",  "fallback": "gemini-3-flash-preview",  "emergency": "claude-sonnet-4.6"},
-    "routing":         {"primary": "gemini-3.1-flash-lite",  "fallback": "gemini-3-flash-preview",  "emergency": "gemini-3-flash-preview"},
-    "subtask":         {"primary": "gemini-3-flash-preview",  "fallback": "gemini-3-flash-preview",  "emergency": "gemini-3.1-flash-lite"},
+    # ── Gemini Pro 层（通用任务） ───────────────────────────────────────────────────
+    "chat":             {"primary": "gemini-3.1-pro-preview",  "fallback": "gemini-3-flash-preview",  "emergency": "gemini-3.1-flash-lite"},
+    "code_small":       {"primary": "gemini-3.1-pro-preview",  "fallback": "gemini-3-flash-preview",  "emergency": "gemini-3.1-flash-lite"},
+    "code_medium":      {"primary": "gemini-3.1-pro-preview",  "fallback": "gemini-3-flash-preview",  "emergency": "gemini-3.1-flash-lite"},
+    "reasoning_light":  {"primary": "gemini-3.1-pro-preview",  "fallback": "gemini-3-flash-preview",  "emergency": "gemini-3.1-flash-lite"},
+    "vision":           {"primary": "gemini-3.1-pro-preview",  "fallback": "gemini-3-flash-preview",  "emergency": "gemini-3.1-flash-lite"},
+    "routing":          {"primary": "gemini-3.1-flash-lite",   "fallback": "gemini-3-flash-preview",  "emergency": "gemini-3.1-flash-lite"},
+    "subtask":          {"primary": "gemini-3.1-pro-preview",  "fallback": "gemini-3-flash-preview",  "emergency": "gemini-3.1-flash-lite"},
+
+    # ── Claude 层（严肃研究 + 系统级编码） ───────────────────────────────────
+    "reasoning":        {"primary": "claude-sonnet-4-6",       "fallback": "gemini-3.1-pro-preview",  "emergency": "gemini-3-flash-preview"},
+    "code_large":       {"primary": "claude-sonnet-4-6",       "fallback": "gemini-3.1-pro-preview",  "emergency": "gemini-3-flash-preview"},
+
+    # ── Grok 层（自动化 Agent + 热点追踪 + 长仓库分析） ────────────────
+    "agent_task":       {"primary": "xai/grok-4.20-reasoning",     "fallback": "claude-sonnet-4-6",       "emergency": "gemini-3.1-pro-preview"},
+    "repo_analysis":    {"primary": "xai/grok-4.20-reasoning",     "fallback": "claude-sonnet-4-6",       "emergency": "gemini-3.1-pro-preview"},
+    "search":           {"primary": "xai/grok-4.20-reasoning",     "fallback": "gemini-3.1-pro-preview",  "emergency": "gemini-3-flash-preview"},
 }
 
 # 子Agent路由矩阵
@@ -52,7 +68,6 @@ SUBAGENT_MATRIX: dict[str, str] = {
     "deep_reasoning": "claude-opus-4.7",
     "multi_model":    "opus-4.7+gpt-5.5",
 }
-
 
 class ModelRegistry:
     """
@@ -80,18 +95,38 @@ class ModelRegistry:
         cls._instance = None
 
     def load_from_config(self, model_matrix_cfg: dict) -> None:
-        """从配置文件中加载模型矩阵。"""
+        """从配置文件中加载模型矩阵（支持新任务类型动态注册）。"""
         for task_type, levels in model_matrix_cfg.items():
-            if task_type in self._matrix:
-                for level in ("primary", "fallback", "emergency"):
-                    if level in levels:
-                        self._matrix[task_type][level] = levels[level]
+            # 允许新任务类型（不强制要求在默认矩阵中）
+            if task_type not in self._matrix:
+                self._matrix[task_type] = {
+                    "primary": "gemini-3.1-pro-preview",
+                    "fallback": "gemini-3-flash-preview",
+                    "emergency": "gemini-3.1-flash-lite",
+                }
+            for level in ("primary", "fallback", "emergency"):
+                if level in levels:
+                    self._matrix[task_type][level] = levels[level]
 
     # ─── 查询接口 ─────────────────────────────────────────────────────────────
+    def resolve_model_input(self, model_input: str) -> str:
+        """
+        将用户输入的模型名/别名解析为完整 API 模型名。
+        。
+        优先级：ANTHROPIC_MODEL 环境变量 > 别名解析 > 原样返回。
+        """
+        env_model = os.environ.get("ANTHROPIC_MODEL")
+        if env_model:
+            return parse_model_alias(env_model)
+        return parse_model_alias(model_input)
+
     def get_model(self, task_type: str, level: ModelLevel = "primary") -> str:
-        """获取指定任务类型和降级级别的模型名称。"""
+        """获取指定任务类型和降级级别的模型名称（已解析别名）。"""
         task_matrix = self._matrix.get(task_type, self._matrix["chat"])
-        return task_matrix.get(level, task_matrix.get("primary", "gemini-3-flash-preview"))
+        raw = task_matrix.get(level, task_matrix.get("primary", "gemini-3-flash-preview"))
+        # 矩阵中如果存在别名（如 "sonnet"），自动解析
+        base = raw.split("[")[0].strip().lower()
+        return parse_model_alias(raw) if base in MODEL_ALIASES else raw
 
     def get_model_chain(self, task_type: str) -> list[str]:
         """返回完整的降级链：[primary, fallback, emergency]。"""
@@ -145,6 +180,18 @@ class ModelRegistry:
             }
             for task, m in self._matrix.items()
         }
+
+    def get_display_name(self, model: str) -> str:
+        """获取模型的可读显示名称。"""
+        canonical = get_canonical_name(model)
+        display_map = {
+            "claude-opus-4-6":   "Opus 4.6",
+            "claude-opus-4-5":   "Opus 4.5",
+            "claude-sonnet-4-6": "Sonnet 4.6",
+            "claude-sonnet-4-5": "Sonnet 4.5",
+            "claude-haiku-4-5":  "Haiku 4.5",
+        }
+        return display_map.get(canonical, model)
 
     def __repr__(self) -> str:
         return f"ModelRegistry(tasks={len(self._matrix)}, models={len(self.list_all_models())})"

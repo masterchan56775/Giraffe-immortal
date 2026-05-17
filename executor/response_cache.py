@@ -126,16 +126,18 @@ class ResponseCache:
             return
         self._persist_path.parent.mkdir(parents=True, exist_ok=True)
         serializable = {}
+        import json as _json
         for key, entry in self._cache.items():
             if not entry.is_expired():
                 try:
+                    _json.dumps(entry.value)  # 预检：确认值可 JSON 序列化
                     serializable[key] = {
                         "value": entry.value,
                         "created_at": entry.created_at,
                         "ttl": entry.ttl,
                     }
-                except Exception:
-                    pass  # 不可序列化的条目跳过
+                except (TypeError, ValueError) as e:
+                    logger.debug(f"[ResponseCache] 条目不可序列化，跳过: {e}")
         with open(self._persist_path, "w", encoding="utf-8") as f:
             json.dump(serializable, f, ensure_ascii=False, indent=2)
 

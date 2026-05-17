@@ -1,57 +1,34 @@
 # Giraffe — Production-Grade AI Runtime Framework
 
-DAG Execution Engine | Multi-Agent Swarm | Full-Stack Telemetry | Multi-Tier Memory | Self-Healing Immunity | Semantic Retrieval
+DAG Execution Engine | Multi-Agent Swarm | Full-Stack Telemetry | Layered Memory | Self-Healing | Coordinator-Worker | Skills System
 
 ---
 
 ## Overview
 
-Giraffe is a production-grade AI runtime framework designed to solve common issues when directly calling large language model APIs: unrecoverable call failures, loss of context across sessions, inability to decompose and collaborate on complex tasks, and lack of observability of system behavior.
+Giraffe is a production-grade AI application runtime that 
 
-Giraffe is not a chatbot; it is a **complete AI scheduling and operations foundation**. It takes over the entire pipeline from user input to model invocation and result delivery, embedding engineering capabilities at every step:
+**Core Capabilities**
 
-- **Reliable Invocation**: When an API fails, the self-healing system automatically matches antibody rules to execute retries, model degradation, or parameter correction without manual intervention.
-- **Persistent Context**: A 4-tier memory system (Memory → JSON → SQLite → Vector Store) ensures key information persists across sessions, recalling historical knowledge based on semantic relevance.
-- **Task Decomposition**: Complex instructions are decomposed by the DAG engine into multi-node directed graphs, supporting conditional branching, failure fallback, and resuming from breakpoints.
-- **Collaborative Orchestration**: High-complexity tasks trigger the Multi-Agent Swarm, where multiple specialized roles take turns speaking until consensus is reached.
-- **Full Observability**: OpenTelemetry tracks the duration of each node, and the EventBus pushes internal states to the frontend in real-time.
-
-**Use Cases**: AI backend services requiring stability, observability, and self-healing capabilities, such as intelligent customer service, code generation platforms, automated operations assistants, and multi-step workflow engines.
+- **Reliable Calls**: Exponential backoff retry, circuit breaker, self-healing immunity system
+- **Persistent Context**: Multi-layer memory (RAM → JSON → SQLite → Vector) + CLAUDE.md project instruction injection
+- **Task Decomposition**: DAG engine breaks complex tasks into resumable multi-step workflows
+- **Orchestration**: xhigh tier triggers Coordinator-Worker (Grok plans, Claude Workers execute in parallel)
+- **Full Observability**: OpenTelemetry tracing + structured color logs + usage statistics
 
 ---
 
 ## Installation
 
-### Method 1: pip install (Recommended)
-
 ```bash
-# Basic installation
+# Basic
 pip install .
 
-# With vector retrieval
-pip install ".[vector]"
-
-# With MCP protocol
-pip install ".[mcp]"
-
-# All features
+# Full features (vector search + MCP)
 pip install ".[all]"
-```
 
-After installation, simply type `giraffe` in the terminal.
-
-### Method 2: Run from source
-
-```bash
-# Install dependencies
-pip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp
-pip install fastapi uvicorn python-multipart
-
-# Optional (auto-degrades if missing)
-pip install chromadb sentence-transformers   # Vector semantic retrieval
-pip install mcp                              # MCP protocol
-
-# Run directly
+# From source
+pip install opentelemetry-api opentelemetry-sdk fastapi uvicorn
 python giraffe.py
 ```
 
@@ -59,161 +36,305 @@ python giraffe.py
 
 ## Quick Start
 
-### 1. Initialize Configuration
-
-On first use, run `--init` to copy default configurations to your user directory `~/.giraffe/`:
+### 1. Initialize
 
 ```bash
 giraffe --init
 ```
 
-### 2. Configure Authentication (Dual Engine Architecture)
+Creates `~/.giraffe/config.json`. Fill in your API credentials.
 
-Edit `~/.giraffe/config.json` to configure your settings. The system supports a dual-engine authentication mechanism:
+### 2. Authentication
 
-**Option A — Google Cloud ADC (Recommended for Vertex AI):**
+**Option A — Vertex AI ADC (Recommended, no key needed)**
+
+```bash
+gcloud auth application-default login
+```
 
 ```json
 {
   "router": {
     "primary_model": {
       "provider": "vertex_ai",
-      "project": "YOUR_PROJECT_ID",
-      "location": "us-central1"
+      "model": "gemini-3-flash-preview",
+      "project": "YOUR_GCP_PROJECT_ID",
+      "location": "global"
     }
   }
 }
 ```
 
-Before use, ensure you have completed local ADC authentication via the gcloud CLI: `gcloud auth application-default login`. The system automatically acquires ADC credentials; no API key is required.
-
-**Option B — OpenAI-Compatible API Key Authentication:**
-
-```json
-{
-  "router": {
-    "primary_model": {
-      "provider": "openai",
-      "base_url": "https://api.openai.com/v1",
-      "api_key": "sk-your-key"
-    }
-  }
-}
-```
-When the system detects a valid `api_key` in the configuration, it automatically falls back to standard HTTP REST calls via urllib.
-
-### 3. Startup
+**Option B — API Key (OpenAI-compatible)**
 
 ```bash
-# Interactive mode
-giraffe
-
-# Web server mode (REST / WebSocket / SSE)
-giraffe --serve
-
-# Route testing (does not trigger API calls)
-giraffe --test-route "Design a system architecture"
-
-# System health check
-giraffe --health
-
-# Trigger evolution engine
-giraffe --evolve
+# .env
+GIRAFFE_API_KEY=sk-your-key
+ANTHROPIC_API_KEY=sk-ant-...
 ```
 
----
-
-## Subsystem Details
-
-### DAG Execution Engine (`graph/`)
-
-Traditional pipelines execute a fixed 8-step sequence. Giraffe refactors this into a Directed Acyclic Graph (DAG), where each stage is a `Node` subclass. The `GraphEngine` manages state transitions according to registered edges, supporting conditional branches and loop protection.
-
-**Resuming from Breakpoints**: After each node executes, the `CheckpointStore` (SQLite) automatically saves a `(trace_id, node_name, step_index, state_json)` snapshot. If the process crashes, calling `GraphEngine.resume(trace_id)` resumes execution from the last completed node.
-
-### Multi-Agent Swarm (`swarm/`)
-
-When the routing engine determines a task's complexity is `high` (e.g., large-scale code generation), the system routes the request to the `SwarmOrchestrator` for multi-role collaboration.
-
-**Built-in Roles**:
-- **Architect**: Analyzes requirements, designs architectures, and decomposes tasks (Temperature 0.3).
-- **Coder**: Writes code based on the design (Temperature 0.2).
-- **Reviewer**: Checks quality and security, outputting APPROVED or feedback (Temperature 0.1).
-
-### Multi-Tier Memory System (`memory/`)
-
-| Tier | Medium | Lifecycle | Purpose |
-|------|--------|-----------|---------|
-| Short-term | Memory LRU | Current session | Maintains conversation continuity |
-| Factual | JSON File | Persistent | Auto-extracted structured knowledge |
-| Long-term | SQLite | Persistent | Full history, supports keyword search |
-| Semantic | ChromaDB | Persistent | Vector similarity recall |
-
-**Hybrid Retrieval**: `MemorySystem.semantic_search()` retrieves top_k candidates from the vector database, merges them with keyword search results, and ranks them by a composite score.
-
-### Self-Healing Immunity System (`self_heal/`)
-
-Giraffe treats API call failures as "infections" and automatically repairs them using a mechanism akin to a biological immune system.
-
-**8 Built-in Antibodies**:
-- **Network Timeout**: Exponential backoff retry
-- **Rate Limit**: Wait and retry
-- **Model Unavailable**: Switch to backup model
-- **Insufficient Quota**: Switch to free model
-- **Context Overflow**: Trigger deep compression and retry
-- **JSON Parsing Error**: Add formatting constraints and retry
-- **Permission Denied**: Downgrade to lower-permission model
-- **Service Unavailable**: Wait + retry
-
-### Routing Engine (`router/`)
-
-The system uses a dual-path routing strategy:
-1. **Fast Path (<1ms)**: Keyword and regex-based intent classifier.
-2. **Slow Path (~200ms)**: LLM-based classification when the fast path lacks confidence.
-
-**5-Tier Admission Control**: Allocates resources based on task complexity (nano, low, medium, high, xhigh).
-
-### Observability (`observability/`)
-
-All critical paths create Spans via OpenTelemetry.
-- `@traced` decorator: Add tracing to any function with one line.
-- **EventBus**: Real-time pushing of states (SSE/WebSocket) for `stage_start`, `stage_end`, `token_chunk`, `self_heal_attempt`, `swarm_turn`.
-
----
-
-## Extension Development
-
-### Custom Skills
-Create a `skill_*.py` file in the `skills/` directory:
-```python
-SKILL_NAME = "Weather Query"
-def execute(city: str) -> str:
-    return f"{city}: Sunny, 25°C"
-```
-
-### Adding MCP Tool Servers
-Register a new MCP Server in `config.json`:
-```json
-{
-  "mcp": {
-    "servers": {
-      "filesystem": { "command": "npx", "args": ["mcp-server-filesystem", "./"] }
-    }
-  }
-}
-```
-
-### Lifecycle Hooks
-The `HookSystem` provides 7 lifecycle events for logging or custom logic injection.
-
-### Custom Antibody Rules
-Dynamically add antibodies for specific business scenarios via the `AntibodyLibrary`.
-
----
-
-## Testing
+### 3. Launch
 
 ```bash
-# Run all 429 test cases
-python -m pytest tests/ -v
+giraffe                          # Interactive mode
+giraffe --serve                  # Web server (REST + WebSocket + SSE)
+giraffe --debug                  # Verbose logging
+giraffe --quiet                  # WARNING+ only
+giraffe --log-file giraffe.log   # Write logs to file (rotating, 10MB×5)
+giraffe --no-color               # Disable ANSI color
+giraffe --test-route "design a system architecture"  # Test routing (no API call)
 ```
+
+---
+
+## Routing Strategy
+
+### Three-Layer Pipeline
+
+```
+User Input
+   ↓
+① Intent Classification (<1ms keyword / ~200ms LLM fallback)
+   ↓
+② Tier Determination (task type × complexity)
+   ↓
+③ Model Selection (primary → fallback → emergency)
+```
+
+### Intent Classification (priority order)
+
+| Priority | Trigger | Type | Primary Model |
+|----------|---------|------|--------------|
+| 0 | Image input | `VISION` | Gemini Pro |
+| Special | "Can you X?" / "Do you support X?" | `CHAT` | Gemini Flash |
+| 1 | automation / batch / agentic | `AGENT_TASK` | **Grok** |
+| 2 | analyze repo / entire codebase | `REPO_ANALYSIS` | **Grok** |
+| 3 | refactor / architecture / system design | `CODE_LARGE` | **Claude** |
+| 4 | deep analysis / math proof / reasoning | `REASONING` | **Claude** |
+| 5 | write code / implement / develop | `CODE_MEDIUM` | Gemini Pro |
+| 6 | explain / compare / analyze | `REASONING_LIGHT` | Gemini Pro |
+| 7 | search / trending / latest news | `SEARCH` | **Grok** |
+| 8 | one-liner fix / add comment | `CODE_SMALL` | Gemini Pro |
+| 9 | small talk / hello | `CHAT` | Gemini Flash |
+
+### Tier System
+
+| Tier | Share | Auto-exec | Cost Cap | Special |
+|------|-------|-----------|---------|---------|
+| **nano** | 40% | ✅ | $0.01 | — |
+| **low** | 40% | ✅ | $0.05 | — |
+| **medium** | 15% | ❌ | $1.00 | — |
+| **high** | 4% | ❌ | $5.00 | — |
+| **xhigh** | 1% | ❌ | $10.00 | Triggers Coordinator-Worker |
+
+Complexity bumps: `COMPLEX` → +1 tier, `EXTREME` → +2 tiers (capped at xhigh)
+
+### Model Matrix
+
+```
+Grok Layer (xai/grok-4.20-reasoning)
+  agent_task    → grok-4.20    → claude-sonnet-4-6 → gemini-3.1-pro
+  repo_analysis → grok-4.20    → claude-sonnet-4-6 → gemini-3.1-pro
+  search        → grok-4.20    → gemini-3.1-pro    → gemini-flash
+
+Claude Layer (claude-sonnet-4-6)
+  code_large    → claude-sonnet → gemini-3.1-pro   → gemini-flash
+  reasoning     → claude-sonnet → gemini-3.1-pro   → gemini-flash
+
+Gemini Layer (everything else)
+  chat          → gemini-3.1-pro → gemini-flash   → flash-lite
+  code_medium   → gemini-3.1-pro → gemini-flash   → flash-lite
+```
+
+---
+
+## Model Alias System
+
+Short aliases resolve to the latest model version automatically:
+
+| Alias | Resolves To | Supports [1m] |
+|-------|------------|--------------|
+| `sonnet` | `claude-sonnet-4-6` | ✅ `sonnet[1m]` |
+| `opus` | `claude-opus-4-6` | ✅ `opus[1m]` |
+| `haiku` | `claude-haiku-4-5` | — |
+| `grok` | `xai/grok-4.20-reasoning` | — |
+| `flash` | `gemini-3-flash-preview` | — |
+| `gemini` | `gemini-3.1-pro-preview` | — |
+| `lite` | `gemini-3.1-flash-lite` | — |
+
+Priority: `ANTHROPIC_MODEL` env var > alias > raw model name
+
+---
+
+## Logging System
+
+Managed centrally via `observability/logging_config.py`.
+
+### Format
+
+Terminal (ANSI color):
+```
+20:15:30 INFO     router  : [Router] routing decision: reasoning → claude-sonnet-4-6
+20:15:31 INFO     pipeline: [Pipeline] call succeeded in 1243ms
+20:15:31 WARNING  compact : [Compactor] context at 72%, triggering micro-compact
+```
+
+File (`--log-file`, rotating):
+```
+2026-05-17 20:15:30 [INFO    ] executor.pipeline: [Pipeline] call succeeded
+```
+
+### CLI Flags
+
+| Flag | Description |
+|------|-------------|
+| `--debug` | DEBUG level, all details visible |
+| `--quiet` | WARNING+ only, for production |
+| `--log-file PATH` | Also write to rotating file |
+| `--no-color` | Disable ANSI color (CI/redirect) |
+
+### Runtime Adjustment (no restart needed)
+
+```
+/loglevel debug    → switch to DEBUG
+/loglevel info     → back to INFO
+/loglevel warning  → warnings only
+/loglevel          → show current level
+```
+
+---
+
+## CLI Commands
+
+### Model / Tier Switching
+
+| Command | Description |
+|---------|-------------|
+| `/model <name>` | Lock model (supports aliases) |
+| `/model auto` | Clear lock, restore auto-routing |
+| `/tier <tier>` | Lock tier (nano/low/medium/high/xhigh) |
+| `/auto` | Clear all locks |
+| `/grok` `/claude` `/sonnet` `/opus` `/haiku` `/flash` | Quick switch |
+| `/models` | List all aliases |
+
+### Skills System
+
+| Command | Description |
+|---------|-------------|
+| `/skills` | List all available skills |
+| `/analyze_repo` | Deep repository architecture analysis |
+| `/review [file]` | Code review |
+| `/debug [issue]` | Systematic debugging analysis |
+| `/test [file]` | Generate test code |
+| `/doc [file]` | Generate documentation |
+
+Custom skills: place `.md` files in `~/.giraffe/skills/` (YAML frontmatter + Markdown body).
+
+### System Commands
+
+| Command | Description |
+|---------|-------------|
+| `/health` | System health check |
+| `/memory` | Memory system summary |
+| `/usagestats` | Usage stats (sessions/days/model costs) |
+| `/loglevel [level]` | View/set log level |
+| `/stats` | Pipeline execution statistics |
+| `/token` | Token budget tracking |
+| `/route <msg>` | Test routing decision |
+| `/evolve` | Trigger evolution engine |
+| `/antibody` | Antibody library status |
+| `/fusion` | AutoFusion engine status |
+| `/quit` `/q` | Exit |
+
+---
+
+## Skills System
+
+### Markdown Skill Format
+
+```markdown
+---
+name: analyze_repo
+description: Deep code repository architecture analysis
+model: grok
+aliases: [ar, repo]
+---
+
+# Repository Analysis
+
+Systematically analyze the current codebase:
+1. Overall architecture and module layout
+2. Core data flows
+3. Key improvement recommendations
+```
+
+### Load Priority
+
+1. `~/.giraffe/skills/` — user global skills
+2. `./.giraffe/skills/` — project-level skills
+3. Built-in skills (`analyze_repo`/`review`/`debug`/`test`/`doc`)
+
+---
+
+## Project Memory (CLAUDE.md / GIRAFFE.md)
+
+Create `GIRAFFE.md` in your project root:
+
+```markdown
+# Project Standards
+
+- Use Python 3.12+
+- All functions must have type annotations
+- Logging: `logging.getLogger(__name__)`
+- Test coverage: 80%+
+```
+
+Automatically injected into every conversation's system prompt.
+
+Search path (decreasing priority):
+1. `~/.giraffe/GIRAFFE.md` — global user preferences
+2. `./GIRAFFE.md` or `./CLAUDE.md` — project root
+3. `./.giraffe/GIRAFFE.md` — project config directory
+
+---
+
+## Architecture
+
+```
+User Input / HTTP / WebSocket
+        ↓
+① Observability   Color logs + OpenTelemetry + Usage stats
+        ↓
+② Router          Intent (<1ms) → Tier → Model matrix
+                  Complex tasks → Coordinator-Worker (xhigh)
+        ↓
+③ Memory          CLAUDE.md inject + Multi-layer + Context compression
+        ↓
+④ Pipeline        DAG → Circuit breaker → Retry → Tool result store
+        ↓
+⑤ Tools           BashTool (whitelist) / GrepTool / WorktreeTool
+                  shell_validator (30+ git + 50+ external commands)
+        ↓
+⑥ SelfHeal        8 built-in antibodies → ErrorProcessor → EvolutionEngine
+        ↓
+⑦ Security        P0/P1/P2 approval + Token budget tracking
+        ↓
+⑧ Integration     FastAPI / MCPRegistry / HermesBridge / EventBus
+```
+
+---
+
+## Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `ANTHROPIC_API_KEY` | Anthropic API key |
+| `ANTHROPIC_MODEL` | Override all routing (force specific model) |
+| `ANTHROPIC_DEFAULT_SONNET_MODEL` | Custom Sonnet version |
+| `ANTHROPIC_DEFAULT_OPUS_MODEL` | Custom Opus version |
+| `ANTHROPIC_SMALL_FAST_MODEL` | Model for side_query operations |
+| `GIRAFFE_API_KEY` | Generic API key (referenced as `${GIRAFFE_API_KEY}`) |
+| `GIRAFFE_USE_VERTEX` | Enable Vertex AI provider |
+| `GIRAFFE_USE_BEDROCK` | Enable AWS Bedrock provider |
+| `GIRAFFE_AVAILABLE_MODELS` | Comma-separated model allowlist |
+| `ANTHROPIC_CUSTOM_MODEL_OPTION` | Custom model (skip validation) |

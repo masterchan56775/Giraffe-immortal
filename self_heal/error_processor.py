@@ -215,6 +215,8 @@ class ErrorProcessor:
                 return ErrorCategory.CREDIT
             if http_code == 429:
                 return ErrorCategory.RATE_LIMIT
+            if http_code == 404:
+                return ErrorCategory.MODEL
             if http_code in (502, 503):
                 return ErrorCategory.MODEL
             return ErrorCategory.UNKNOWN
@@ -223,6 +225,8 @@ class ErrorProcessor:
 
         if http_code in (401, 403):
             return ErrorCategory.AUTH
+        if http_code == 404 or ("not found" in msg_lower and ("model" in msg_lower or "endpoint" in msg_lower or "404" in msg_lower)):
+            return ErrorCategory.MODEL
         if http_code == 402 or "insufficient" in msg_lower or "credit" in msg_lower:
             return ErrorCategory.CREDIT
         if http_code == 429 or "rate limit" in msg_lower or "too many" in msg_lower:
@@ -231,9 +235,6 @@ class ErrorProcessor:
             return ErrorCategory.MODEL
         if "timeout" in msg_lower or "timed out" in msg_lower:
             return ErrorCategory.NETWORK
-        # 修复运算符优先级 Bug：原来的 "token" in msg_lower and "limit" in msg_lower
-        # 在 or 链中会先计算 "context" in msg_lower，再 and 后面的部分
-        # 导致 "xxx context xxx" 简单包含 context 也类分为 CONTEXT
         if "context" in msg_lower or ("token" in msg_lower and "limit" in msg_lower):
             return ErrorCategory.CONTEXT
         if "json" in msg_lower or "parse" in msg_lower:

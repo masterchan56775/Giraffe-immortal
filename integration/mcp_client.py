@@ -140,8 +140,8 @@ class MCPClient:
         if self._process:
             try:
                 self._process.terminate()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"[MCPClient:{self.server_name}] 进程终止失败（可能已退出）: {e}")
         self._connected = False
         self._session = None
         logger.info(f"[MCPClient:{self.server_name}] 已断开连接")

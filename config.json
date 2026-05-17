@@ -87,57 +87,74 @@
     "mode": "auto",
     "complexity_estimation": true,
     "llm_fallback": true,
+    "claude_location": "global",
     "primary_model": {
       "provider": "vertex_ai",
       "model": "gemini-3-flash-preview",
-      "project": "YOUR_PROJECT_ID",
-      "location": "us-central1"
+      "project": "",
+      "location": "global",
+      "api_key": "${GIRAFFE_API_KEY}"
     },
     "model_matrix": {
       "chat": {
-        "primary": "gemini-3-flash-preview",
+        "primary": "gemini-3.1-pro-preview",
         "fallback": "gemini-3-flash-preview",
         "emergency": "gemini-3.1-flash-lite"
       },
       "code_small": {
         "primary": "gemini-3.1-pro-preview",
         "fallback": "gemini-3-flash-preview",
-        "emergency": "gemini-3-flash-preview"
+        "emergency": "gemini-3.1-flash-lite"
       },
       "code_medium": {
-        "primary": "gemini-3-flash-preview",
-        "fallback": "claude-haiku-4.5",
-        "emergency": "gemini-3.1-pro-preview"
-      },
-      "code_large": {
-        "primary": "claude-sonnet-4.6",
+        "primary": "gemini-3.1-pro-preview",
         "fallback": "gemini-3-flash-preview",
-        "emergency": "claude-haiku-4.5"
+        "emergency": "gemini-3.1-flash-lite"
       },
       "reasoning_light": {
-        "primary": "gemini-3-flash-preview",
+        "primary": "gemini-3.1-pro-preview",
         "fallback": "gemini-3-flash-preview",
-        "emergency": "claude-haiku-4.5"
-      },
-      "reasoning": {
-        "primary": "opus-4.7",
-        "fallback": "claude-sonnet-4.6",
-        "emergency": "gpt-5.5"
+        "emergency": "gemini-3.1-flash-lite"
       },
       "vision": {
-        "primary": "gemini-3.1-flash-lite",
+        "primary": "gemini-3.1-pro-preview",
         "fallback": "gemini-3-flash-preview",
-        "emergency": "claude-sonnet-4.6"
+        "emergency": "gemini-3.1-flash-lite"
       },
       "routing": {
         "primary": "gemini-3.1-flash-lite",
         "fallback": "gemini-3-flash-preview",
-        "emergency": "gemini-3-flash-preview"
+        "emergency": "gemini-3.1-flash-lite"
       },
       "subtask": {
-        "primary": "gemini-3-flash-preview",
+        "primary": "gemini-3.1-pro-preview",
         "fallback": "gemini-3-flash-preview",
         "emergency": "gemini-3.1-flash-lite"
+      },
+      "reasoning": {
+        "primary": "claude-sonnet-4-6",
+        "fallback": "gemini-3.1-pro-preview",
+        "emergency": "gemini-3-flash-preview"
+      },
+      "code_large": {
+        "primary": "claude-sonnet-4-6",
+        "fallback": "gemini-3.1-pro-preview",
+        "emergency": "gemini-3-flash-preview"
+      },
+      "agent_task": {
+        "primary": "xai/grok-4.20-reasoning",
+        "fallback": "claude-sonnet-4-6",
+        "emergency": "gemini-3.1-pro-preview"
+      },
+      "repo_analysis": {
+        "primary": "xai/grok-4.20-reasoning",
+        "fallback": "claude-sonnet-4-6",
+        "emergency": "gemini-3.1-pro-preview"
+      },
+      "search": {
+        "primary": "xai/grok-4.20-reasoning",
+        "fallback": "gemini-3.1-pro-preview",
+        "emergency": "gemini-3-flash-preview"
       }
     },
     "circuit_breaker": {
@@ -150,31 +167,31 @@
         "ratio": 0.4,
         "auto_execute": true,
         "cost_threshold": 0.01,
-        "model": "gemini-3-flash-preview"
+        "model": "gemini-3.1-flash-lite"
       },
       "low": {
         "ratio": 0.4,
         "auto_execute": true,
         "cost_threshold": 0.05,
-        "model": "gemini-3.1-pro-preview"
+        "model": "gemini-3-flash-preview"
       },
       "medium": {
         "ratio": 0.15,
-        "auto_execute": false,
+        "auto_execute": true,
         "cost_threshold": 1.0,
-        "model": "claude-sonnet-4.6"
+        "model": "gemini-3-flash-preview"
       },
       "high": {
         "ratio": 0.04,
-        "auto_execute": false,
+        "auto_execute": true,
         "cost_threshold": 5.0,
-        "model": "opus-4.7"
+        "model": "claude-sonnet-4-6"
       },
       "xhigh": {
         "ratio": 0.01,
-        "auto_execute": false,
+        "auto_execute": true,
         "cost_threshold": 10.0,
-        "model": "opus-4.7+gpt-5.5"
+        "model": "claude-sonnet-4-6"
       }
     }
   },

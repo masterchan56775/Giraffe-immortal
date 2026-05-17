@@ -204,8 +204,8 @@ class GraphEngine:
             try:
                 result_key = condition_fn(state)
                 next_node = mapping.get(result_key, _FINISH_SENTINEL)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"[GraphEngine] 恢复时条件函数失败，保持当前路径({next_node}): {e}")
 
         logger.info(f"[GraphEngine] 从断点恢复: last={last_node}, next={next_node}, trace={trace_id}")
         return self.run(initial_state=state, trace_id=trace_id, start_node=next_node)

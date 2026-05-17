@@ -81,8 +81,12 @@ class LLMClassifier:
                 )
 
             try:
-                # 自动使用 ADC 凭据
-                client = genai.Client(vertexai=True)
+                from core.config import GiraffeConfig
+                _cfg = GiraffeConfig.get()
+                _project = _cfg.get_value("router.primary_model.project") or None
+                _location = _cfg.get_value("router.primary_model.location") or "global"
+                # 自动使用 ADC 凭据，并传入配置中的项目信息
+                client = genai.Client(vertexai=True, project=_project, location=_location)
                 response = client.models.generate_content(
                     model=self._model,
                     contents=f"请分类这条消息：{message}",

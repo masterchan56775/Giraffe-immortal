@@ -12,12 +12,9 @@ from pathlib import Path
 # 项目根目录
 BASE_DIR = Path(__file__).parent
 
-# ─── 日志配置 ─────────────────────────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%H:%M:%S",
-)
+# ─── 日志配置（集中管理，详见 observability/logging_config.py）────────────────
+# 注意：logging.basicConfig 已移除，统一使用 setup_logging()
+# 此处仅获取 logger，实际配置在 main() 中完成
 logger = logging.getLogger("giraffe")
 
 # ─── 导入各模块 ───────────────────────────────────────────────────────────────
@@ -43,7 +40,6 @@ from integration.event_stream import EventBus
 from observability.tracer import get_tracer, init_tracer
 from auto_fusion import AutoFusionEngine
 
-
 # ─── Giraffe 系统类 ────────────────────────────────────────────────────────────
 class Giraffe:
     """
@@ -53,8 +49,8 @@ class Giraffe:
 
     BANNER = """
 ╔═══════════════════════════════════════════════════════════╗
-║          Giraffe  v1.0.0                                  ║
-║          DAG | Swarm | Telemetry | Memory | SelfHeal      ║
+║   Giraffe  v1.8                                           ║
+║   DAG · Swarm · Telemetry · Memory · SelfHeal             ║
 ╚═══════════════════════════════════════════════════════════╝
 """
 
@@ -99,6 +95,7 @@ class Giraffe:
         startup.register("安全防护",     self._init_security,      order=60)
         startup.register("网关集成",     self._init_gateway,       order=70)
         startup.register("自动融合引擎", self._init_auto_fusion,   order=80)
+        startup.register("统计追踪",     self._init_stats,         order=85)
 
         results = startup.run_all()
 
@@ -111,6 +108,12 @@ class Giraffe:
         self._initialized = True
         session_id = self.state.initialize()
         logger.info(f"🚀 会话启动: {session_id}")
+        # Stats 会话开始
+        try:
+            from observability.stats import get_tracker
+            get_tracker().start_session(session_id)
+        except Exception:
+            pass
 
     def _init_observability(self) -> None:
         """读取配置并初始化链路追踪。必须最先执行，其他模块可以立即使用tracer。"""
@@ -257,8 +260,33 @@ class Giraffe:
             if report.fused:
                 logger.info(f"[AutoFusion] 新融合 {len(report.fused)} 个特性")
 
+    def _init_stats(self) -> None:
+        """初始化统计追踪器和工具结果持久化存储。"""
+        try:
+            from observability.stats import get_tracker
+            self._stats_tracker = get_tracker()
+        except Exception as e:
+            logger.debug(f"[Stats] 初始化失败（可跳过）: {e}")
+            self._stats_tracker = None
+        try:
+            from executor.tool_result_store import init_store
+            data_dir = Path.home() / ".giraffe" / "sessions" / (
+                self.state.session_id if self.state else "default"
+            )
+            init_store(data_dir)
+        except Exception as e:
+            logger.debug(f"[ToolResultStore] 初始化失败（可跳过）: {e}")
+
     # ─── 消息处理 ─────────────────────────────────────────────────────────────
-    def chat(self, message: str, has_image: bool = False, images: list[str] | None = None) -> str:
+
+    def chat(
+        self,
+        message: str,
+        has_image: bool = False,
+        images: list[str] | None = None,
+        model_override: str | None = None,
+        tier_override: str | None = None,
+    ) -> str:
         """
         处理一条用户消息，返回响应字符串。
         完整经过 Router → Guardrails → Pipeline → Memory 流水线。
@@ -296,20 +324,68 @@ class Giraffe:
                 self.state.set_idle()
                 return f"[路由错误] {e}"
 
+            # ── 用户覆盖（/model 或 /tier 命令设置）────────────────────────
+            _TIER_MODEL_MAP = {
+                "nano":  "gemini-3.1-flash-lite",
+                "low":   "gemini-3.1-pro-preview",
+                "medium": "claude-sonnet-4-6",
+                "high":  "claude-sonnet-4-6",
+                "xhigh": "xai/grok-4.20-reasoning",
+            }
+            if model_override:
+                logger.info(f"[Chat] 模型覆盖: {decision.primary_model} → {model_override}")
+                decision.primary_model = model_override
+                decision.fallback_model = ""
+                decision.emergency_model = ""
+            elif tier_override and tier_override in _TIER_MODEL_MAP:
+                forced = _TIER_MODEL_MAP[tier_override]
+                logger.info(f"[Chat] 档位覆盖 ({tier_override}): {decision.primary_model} → {forced}")
+                decision.primary_model = forced
+                decision.fallback_model = ""
+                decision.emergency_model = ""
+
             # 记忆：获取系统提示词（语义检索注入）
             memory_prompt = self.memory.build_system_prompt()
             messages = self.memory.get_context_messages(max_messages=20)
+
+            # CLAUDE.md / Project Memory 注入
+            try:
+                from memory.claude_md import build_context_from_claude_md
+                claude_md_ctx = build_context_from_claude_md(str(BASE_DIR))
+                if claude_md_ctx:
+                    memory_prompt = claude_md_ctx + "\n\n" + memory_prompt if memory_prompt else claude_md_ctx
+            except Exception as e:
+                logger.debug(f"[CLAUDE.md] 加载失败（可跳过）: {e}")
 
             # MCP 工具列表注入
             mcp_tools = []
             if self.mcp_registry and hasattr(self.mcp_registry, 'get_all_tools_sync'):
                 try:
                     mcp_tools = self.mcp_registry.get_all_tools_sync()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"[Chat] MCP工具获取失败（使用空列表）: {e}")
+
+            # 按任务类型设置 max_tokens（重型任务用大值，闲聊/路由用小值）
+            _MAX_TOKENS_BY_TASK = {
+                "chat":            4096,
+                "code_small":      4096,
+                "code_medium":     8192,
+                "code_large":     16384,
+                "reasoning_light": 8192,
+                "reasoning":      16384,
+                "vision":          4096,
+                "routing":         1024,
+                "subtask":         4096,
+            }
+            _max_tokens = _MAX_TOKENS_BY_TASK.get(decision.task_type.value, 4096)
 
             # 执行
             primary_cfg = self.config.primary_model
+            # 构建降级链（过滤空值和重复）
+            _fallback_chain = [
+                m for m in [decision.fallback_model, decision.emergency_model]
+                if m and m != decision.primary_model
+            ]
             ctx = ExecutionContext(
                 message=message,
                 model=decision.primary_model,
@@ -320,6 +396,13 @@ class Giraffe:
                 system_prompt=memory_prompt,
                 images=images or [],
                 mcp_tools=mcp_tools,
+                max_tokens=_max_tokens,
+                fallback_models=_fallback_chain,
+                # agent_task/repo_analysis 以及 high/xhigh 档位自动启用工具调用
+                use_tools=(
+                    decision.task_type.value in ("agent_task", "repo_analysis")
+                    or (tier_override or "") in ("high", "xhigh")
+                ),
             )
 
             self.hooks.fire("pre_api_request", message=message, model=ctx.model)
@@ -341,7 +424,15 @@ class Giraffe:
                     error=error,
                 )
             else:
-                result = self.pipeline.execute(ctx)
+                # ── xhigh 档位： Coordinator 模式────────────────────────────
+                _is_xhigh = (
+                    (tier_override or "") == "xhigh"
+                    or decision.task_type.value in ("agent_task", "repo_analysis")
+                )
+                if _is_xhigh:
+                    result = self._run_coordinator_mode(message, decision, ctx)
+                else:
+                    result = self.pipeline.execute(ctx)
 
             self.hooks.fire("post_api_response", response=result.response, success=result.success)
 
@@ -352,36 +443,154 @@ class Giraffe:
 
             # 记忆更新（先把 user和assistant回复写入短期记忆）
             self.memory.process_message("user", message)
-            self.memory.process_message("assistant", result.response)
+            # 只有成功且未被截断的回复才写入记忆，避免截断内容污染后续上下文
+            if result.response and not result.error and not getattr(result, 'truncated', False):
+                self.memory.process_message("assistant", result.response)
+            elif result.response and getattr(result, 'truncated', False):
+                logger.warning("[Chat] 回复因 max_tokens 截断，跳过记忆写入")
 
             # Token追踪（估算）
             self.token_tracker.record(
                 model=decision.primary_model,
                 prompt_tokens=len(message) // 4,
-                completion_tokens=len(result.response) // 4,
+                completion_tokens=len(result.response or "") // 4,
                 session_id=self.state.session_id,
             )
 
             # 错误恢复
             if not result.success and result.error:
+                # 从错误消息中提取 HTTP 状态码（格式如 "404 NOT_FOUND..." 或 "'code': 404"）
+                import re as _re
+                _http_code = 0
+                _code_match = _re.search(r"(?:^|\s)([45]\d{2})\b|'code':\s*([45]\d{2})", str(result.error))
+                if _code_match:
+                    _http_code = int(_code_match.group(1) or _code_match.group(2))
                 error_report = self.error_processor.process(
                     error=result.error,
+                    http_code=_http_code,
                     model=decision.primary_model,
                     model_chain=[decision.primary_model, decision.fallback_model, decision.emergency_model],
                 )
                 self.evolution_engine.collect(error_report)
                 self.hooks.fire("error_occurred", error=result.error, report=error_report)
 
-            # 会话日记（每10条消息自动记录一次）
+            # 每 10 条消息自动记录会话摘要
             if len(self.memory.short_term) % 10 == 0:
                 self.memory.record_session(
                     session_id=self.state.session_id,
-                    summary=f"会话{self.state.session_id[:8]}: 共{len(self.memory.short_term)}条消息",
+                    summary=f"会话 {self.state.session_id[:8]}: 共 {len(self.memory.short_term)} 条消息",
                     tags=[decision.task_type.value],
                 )
 
             self.state.set_idle()
             return result.response
+
+    def _run_coordinator_mode(self, message: str, decision, ctx) -> "ExecutionResult":
+        """
+        xhigh 档位：Coordinator-Worker 模式。
+        - Coordinator LLM 负责任务规划与结果合成
+        - Worker LLM 负责具体子任务执行（带 AgenticLoop 工具调用）
+        """
+        from executor.pipeline import ExecutionResult
+        from swarm.coordinator import run_coordinator_sync, get_coordinator_system_prompt
+        from tools import build_tool_registry
+
+        tools = build_tool_registry()
+        print(f"\n🎯 [Coordinator] 启动 xhigh 模式，正在规划任务...\n")
+
+        def _call_coordinator(messages: list, system: str) -> str:
+            """协调器 LLM（Grok/Claude）：规划 + 合成。"""
+            from executor.agentic_loop import run_agentic
+            result = run_agentic(
+                provider="grok" if "grok" in decision.primary_model.lower() else "claude",
+                client=self._get_llm_client(decision.primary_model),
+                model=decision.primary_model,
+                tools={},   # Coordinator 本身不调用工具，由 Worker 执行
+                user_message=messages[-1]["content"] if messages else message,
+                system=system,
+                history=messages[:-1] if messages else [],
+                config={"max_tokens": ctx.max_tokens},
+            )
+            return result.final_text
+
+        def _call_worker(messages: list, system: str) -> str:
+            """Worker LLM（带工具）：执行具体子任务。"""
+            from executor.agentic_loop import run_agentic
+            # Worker 走 AgenticLoop（带工具）
+            worker_msg = messages[-1]["content"] if messages else ""
+            result = run_agentic(
+                provider="claude",   # Worker 用 Claude（代码/研究最强）
+                client=self._get_llm_client("claude-sonnet-4-6"),
+                model="claude-sonnet-4-6",
+                tools=tools,
+                user_message=worker_msg,
+                system=system,
+                history=messages[:-1] if messages else [],
+                config={"max_tokens": ctx.max_tokens},
+                on_text=lambda t: print(f"  [Worker] {t}", end="", flush=True),
+                on_tool_start=lambda n, a: print(f"\n  🔧 [Worker] 调用工具: {n}"),
+                on_tool_done=lambda uid, r: print(
+                    f"  {'✅' if not r.is_error else '❌'} [Worker] 工具完成"
+                ),
+            )
+            return result.final_text
+
+        def _on_coordinator_text(text: str) -> None:
+            print(text, end="", flush=True)
+
+        def _on_worker_spawn(task_id: str, desc: str) -> None:
+            print(f"\n🚀 [Coordinator] 派生 Worker: {task_id} — {desc}")
+
+        def _on_worker_done(task_id: str, result) -> None:
+            icon = "✅" if result.status == "completed" else "❌"
+            print(f"\n{icon} [Coordinator] Worker 完成: {task_id} ({result.status})")
+
+        try:
+            final_text = run_coordinator_sync(
+                user_request=message,
+                call_coordinator_llm=_call_coordinator,
+                call_worker_llm=_call_worker,
+                tools=tools,
+                on_coordinator_text=_on_coordinator_text,
+                on_worker_spawn=_on_worker_spawn,
+                on_worker_done=_on_worker_done,
+            )
+            return ExecutionResult(
+                success=True,
+                response=final_text,
+                model=decision.primary_model,
+                task_type=decision.task_type.value,
+            )
+        except Exception as e:
+            logger.error(f"[Coordinator] 执行失败: {e}")
+            # 回退到普通 pipeline
+            return self.pipeline.execute(ctx)
+
+    def _get_llm_client(self, model: str):
+        """根据模型名返回对应的 SDK client。"""
+        from core.config import GiraffeConfig
+        _cfg = GiraffeConfig.get()
+        project = _cfg.get_value("router.primary_model.project") or None
+
+        if model.startswith("claude-"):
+            from anthropic import AnthropicVertex
+            region = _cfg.get_value("router.claude_location") or "global"
+            return AnthropicVertex(project_id=project, region=region)
+        elif "grok" in model.lower():
+            import google.auth
+            import google.auth.transport.requests
+            from openai import OpenAI
+            creds, proj = google.auth.default(
+                scopes=["https://www.googleapis.com/auth/cloud-platform"]
+            )
+            creds.refresh(google.auth.transport.requests.Request())
+            return OpenAI(
+                base_url=f"https://aiplatform.googleapis.com/v1/projects/{proj}/locations/global/endpoints/openapi",
+                api_key=creds.token,
+            )
+        else:
+            from google import genai
+            return genai.Client()
 
     # ─── 调试工具 ─────────────────────────────────────────────────────────────
     def test_route(self, message: str) -> dict:
@@ -439,11 +648,9 @@ class Giraffe:
             return self.credit_monitor.summary()
         return {"error": "信用监控未初始化"}
 
-
 # ─── CLI 主循环 ───────────────────────────────────────────────────────────────
 # 用户级配置目录（pip install 后使用）
 USER_CONFIG_DIR = Path.home() / ".giraffe"
-
 
 def _init_user_config() -> None:
     """将默认配置文件复制到 ~/.giraffe/，供 pip 安装后首次使用。"""
@@ -475,7 +682,6 @@ def _init_user_config() -> None:
     print(f"\n初始化完成。请编辑 {dst_config} 填入 API Key。")
     print(f"之后运行 giraffe 即可启动。\n")
 
-
 def _resolve_config_path(explicit: str | None) -> Path:
     """
     配置文件查找优先级：
@@ -493,7 +699,6 @@ def _resolve_config_path(explicit: str | None) -> Path:
     if user_config.exists():
         return user_config
     return BASE_DIR / "config.json"
-
 
 def main():
     parser = argparse.ArgumentParser(
@@ -515,13 +720,25 @@ def main():
     parser.add_argument("--health", action="store_true", help="显示系统健康状态")
     parser.add_argument("--evolve", action="store_true", help="触发进化引擎")
     parser.add_argument("--debug", action="store_true", help="开启DEBUG日志")
+    parser.add_argument("--log-file", metavar="PATH", default=None, help="日志写入文件路径（轮转，10MB×5）")
+    parser.add_argument("--quiet", action="store_true", help="只显示 WARNING 及以上日志")
+    parser.add_argument("--no-color", action="store_true", help="禁用 ANSI 彩色日志")
     parser.add_argument("--serve", action="store_true", help="启动 Web 服务模式（FastAPI）")
     parser.add_argument("--host", default="0.0.0.0", help="Web 服务监听地址")
     parser.add_argument("--port", type=int, default=8000, help="Web 服务监听端口")
     args = parser.parse_args()
 
+    # ── 日志系统初始化（最早执行）──────────────────────────────────────────────
+    from observability.logging_config import setup_logging
+    _log_level = "DEBUG" if args.debug else ("WARNING" if args.quiet else "INFO")
+    setup_logging(
+        level=_log_level,
+        log_file=args.log_file,
+        color=not args.no_color,
+    )
+
     if args.version:
-        print("giraffe-immortal 1.0.0")
+        print("giraffe-immortal 1.8.0")
         return
 
     if args.init:
@@ -568,11 +785,47 @@ def main():
         return
 
     # ── 交互循环 ──────────────────────────────────────────────────────────────
-    print(f"\n💬 Giraffe已就绪。输入消息开始对话，输入 /quit 退出，/health 查看状态，/evolve 触发进化\n")
+    # 会话级模型/档位覆盖状态
+    _model_override: str | None = None
+    _tier_override:  str | None = None
+
+    # 已知模型别名（可在命令中直接用简称），通过 model_aliases 动态解析
+    from router.model_aliases import (
+        parse_model_alias as _parse_alias,
+        get_default_opus_model as _opus,
+        get_default_sonnet_model as _sonnet,
+        get_default_haiku_model as _haiku,
+    )
+
+    _MODEL_ALIASES: dict[str, str] = {
+        "grok":      "xai/grok-4.20-reasoning",
+        "claude":    _sonnet(),
+        "sonnet":    _sonnet(),
+        "opus":      _opus(),
+        "haiku":     _haiku(),
+        "gemini":    "gemini-3.1-pro-preview",
+        "flash":     "gemini-3-flash-preview",
+        "lite":      "gemini-3.1-flash-lite",
+        "best":      _opus(),
+        "opusplan":  _sonnet(),
+    }
+
+    _VALID_TIERS = ("nano", "low", "medium", "high", "xhigh")
+
+    def _override_status() -> str:
+        parts = []
+        if _model_override:
+            parts.append(f"model={_model_override}")
+        if _tier_override:
+            parts.append(f"tier={_tier_override}")
+        return ("[" + " | ".join(parts) + "] ") if parts else ""
+
+    print(f"\n💬 Giraffe已就绪。输入 /help 查看所有命令\n")
 
     while True:
         try:
-            user_input = input("You> ").strip()
+            prompt = f"You{_override_status()}> "
+            user_input = input(prompt).strip()
         except (EOFError, KeyboardInterrupt):
             print("\n👋 再见！")
             break
@@ -580,19 +833,84 @@ def main():
         if not user_input:
             continue
 
-        # 内置命令
-        if user_input.lower() in ("/quit", "/exit", "/q"):
+        # ── 内置命令 ─────────────────────────────────────────────────────────
+        cmd = user_input.lower().strip()
+        if cmd in ("/quit", "/exit", "/q"):
             print("👋 再见！")
             break
-        elif user_input.lower() == "/health":
+
+        # /model [name|alias|auto]
+        elif cmd == "/model":
+            if _model_override:
+                print(f"🤖 当前模型覆盖: {_model_override}  （/model auto 可清除）")
+            else:
+                print("🤖 模型覆盖: 未设置（自动路由）")
+            continue
+        elif user_input.lower().startswith("/model "):
+            arg = user_input[7:].strip()
+            if arg in ("auto", "reset", "off", ""):
+                _model_override = None
+                print("✅ 模型覆盖已清除，恢复自动路由")
+            else:
+                resolved = _MODEL_ALIASES.get(arg.lower(), arg)
+                _model_override = resolved
+                _tier_override = None  # 互斥
+                print(f"✅ 模型已锁定: {resolved}")
+            continue
+
+        # /tier [nano|low|medium|high|xhigh|auto]
+        elif cmd == "/tier":
+            if _tier_override:
+                print(f"⚙️  当前档位覆盖: {_tier_override}  （/tier auto 可清除）")
+            else:
+                print("⚙️  档位覆盖: 未设置（自动路由）")
+            continue
+        elif user_input.lower().startswith("/tier "):
+            arg = user_input[6:].strip().lower()
+            if arg in ("auto", "reset", "off", ""):
+                _tier_override = None
+                print("✅ 档位覆盖已清除，恢复自动路由")
+            elif arg in _VALID_TIERS:
+                _tier_override = arg
+                _model_override = None  # 互斥
+                print(f"✅ 档位已锁定: {arg}")
+            else:
+                print(f"❌ 无效档位，可选: {', '.join(_VALID_TIERS)}")
+            continue
+
+        # 快捷别名：/grok /claude /gemini /flash 等
+        elif cmd.lstrip("/") in _MODEL_ALIASES and cmd.startswith("/"):
+            target = _MODEL_ALIASES[cmd.lstrip("/")]
+            _model_override = target
+            _tier_override = None
+            print(f"✅ 模型已切换: {target}")
+            continue
+
+
+        # /auto — 清除所有覆盖
+        elif cmd == "/auto":
+            _model_override = None; _tier_override = None
+            print("✅ 所有覆盖已清除，恢复全自动路由")
+            continue
+
+        # /models — 列出所有可用模型
+        elif cmd == "/models":
+            print("可用模型（可直接用别名）:")
+            for alias, full in _MODEL_ALIASES.items():
+                mark = " ◀ 当前" if full == _model_override else ""
+                print(f"  /{alias:10} → {full}{mark}")
+            print("\n完整模型名可直接用 /model <full-name> 设置")
+            continue
+
+        elif cmd == "/health":
             import json as _json
             print(_json.dumps(giraffe.health(), ensure_ascii=False, indent=2))
             continue
-        elif user_input.lower() == "/evolve":
+        elif cmd == "/evolve":
             import json as _json
             print(_json.dumps(giraffe.evolve(), ensure_ascii=False, indent=2))
             continue
-        elif user_input.startswith("/route "):
+        elif user_input.lower().startswith("/route "):
             import json as _json
             msg = user_input[7:]
             print(_json.dumps(giraffe.test_route(msg), ensure_ascii=False, indent=2))
@@ -627,28 +945,139 @@ def main():
             stats = giraffe.token_tracker.total_stats() if giraffe.token_tracker else {}
             print(_json.dumps(stats, ensure_ascii=False, indent=2))
             continue
-        elif user_input.lower() == "/help":
-            print("""
-命令列表:
-  /quit, /exit, /q  退出
-  /health           系统健康检查
-  /memory           记忆系统摘要
-  /credit           信用监控状态
-  /topup            确认充値（切回三方API）
-  /evolve           触发进化引擎
-  /route <消息>    测试路由决策
-  /fusion           自动融合引擎状态
-  /antibody         抗体库状态
-  /token            Token预算追踪
-  /stats            流水线执行统计
-  /help             显示本帮助
+
+        # /loglevel — 运行时动态调整日志级别
+        elif cmd == "/loglevel":
+            from observability.logging_config import get_log_level
+            print(f"📋 当前日志级别: {get_log_level()}  （可用: /loglevel debug/info/warning/error）")
+            continue
+        elif user_input.lower().startswith("/loglevel "):
+            lvl_arg = user_input[10:].strip().upper()
+            valid = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+            if lvl_arg in valid:
+                from observability.logging_config import set_log_level
+                set_log_level(lvl_arg)  # type: ignore[arg-type]
+                print(f"✅ 日志级别已调整为: {lvl_arg}")
+            else:
+                print(f"❌ 无效级别，可选: {', '.join(v.lower() for v in valid)}")
+            continue
+
+        # /skills — 列出所有可用技能
+        elif cmd == "/skills":
+            try:
+                from skills.loader import list_skills
+                skills = list_skills(cwd=str(BASE_DIR))
+                print("\n📚 可用技能 (Skills):\n")
+                for sk in skills:
+                    src_tag = f"[{sk.source}]" if sk.source != "bundled" else ""
+                    aliases = ", ".join(f"/{a}" for a in sk.aliases) if sk.aliases else ""
+                    alias_str = f"  (并名: {aliases})" if aliases else ""
+                    print(f"  /{sk.name:20} {sk.description}{alias_str} {src_tag}")
+                print(f"\n共 {len(skills)} 个技能。在 ~/.giraffe/skills/ 下放置 .md 文件可自定义技能。")
+            except Exception as e:
+                print(f"[技能] 加载失败: {e}")
+            continue
+
+        # /skill <name> [args] — 执行指定技能
+        elif user_input.lower().startswith("/skill ") or (
+            user_input.startswith("/") and not user_input.lower().startswith("/model ")
+            and not user_input.lower().startswith("/tier ")
+            and not cmd.startswith("/")
+        ):
+            # 尝试匹配技能名
+            raw = user_input.lstrip("/")
+            parts_cmd = raw.split(" ", 1)
+            skill_name = parts_cmd[0].lower()
+            skill_args = parts_cmd[1] if len(parts_cmd) > 1 else ""
+            try:
+                from skills.loader import get_skill
+                skill = get_skill(skill_name, cwd=str(BASE_DIR))
+                if skill:
+                    skill_prompt = skill.get_prompt(skill_args)
+                    # 将技能提示词当作系统提示词 + 用户消息执行
+                    print(f"\n📚 执行技能: /{skill_name}\n")
+                    combined = f"[SKILL: {skill.name}]\n{skill_prompt}\n\n用户参数: {skill_args}" if skill_args else f"[SKILL: {skill.name}]\n{skill_prompt}"
+                    response = giraffe.chat(
+                        combined,
+                        model_override=skill.model or _model_override,
+                        tier_override=_tier_override,
+                    )
+                    print(f"\nGiraffe> {response}\n")
+                    continue
+            except Exception:
+                pass
+            # 未匹配到技能，继续走普通消息路径
+
+        # /usagestats — 显示使用统计
+        elif cmd == "/usagestats":
+            try:
+                from observability.stats import get_tracker
+                from dataclasses import asdict
+                import json as _json
+                stats = get_tracker().compute_stats(days=30)
+                print(f"""
+📊 Giraffe 使用统计 (近30天)
+  会话数:    {stats.total_sessions}
+  消息数:    {stats.total_messages}
+  工具调用:  {stats.total_tool_calls}
+  活跃天数:  {stats.active_days}
+  连续天数:  {stats.streaks.current_streak} 天 (最长: {stats.streaks.longest_streak} 天)
+  最活跃时段: {stats.peak_activity_hour}:00
+  首次使用:  {stats.first_session_date or 'N/A'}
+  最近使用:  {stats.last_session_date or 'N/A'}
 """)
+                if stats.model_usage:
+                    print("  模型用量:")
+                    for model, usage in sorted(stats.model_usage.items()):
+                        total_tok = usage.get('input', 0) + usage.get('output', 0)
+                        print(f"    {model}: {total_tok:,} tokens (cost: ${usage.get('cost',0):.3f})")
+            except Exception as e:
+                print(f"[统计] 读取失败: {e}")
+            continue
+
+        elif cmd == "/help":
+
+            print("""
+┌─ 模型 / 档位切换 ─────────────────────────────────────────────────┐
+│  /model <name>     锁定模型（后续所有请求强制使用）             │
+│  /model auto       清除模型锁定，恢复自动路由                   │
+│  /tier <tier>      锁定档位 (nano/low/medium/high/xhigh)        │
+│  /auto             清除所有锁定，完全自动路由                   │
+│  /grok /claude /gemini /flash  快速切换模型                     │
+│  /models           列出所有可用别名                             │
+├─ 技能系统 (Skills) ────────────────────────────────────────────────┤
+│  /skills           列出所有可用技能                             │
+│  /<skill> [args]   执行指定技能（如 /analyze_repo /review ...） │
+│  /analyze_repo     深入分析当前代码仓库架构                     │
+│  /review [file]    代码审查                                     │
+│  /debug [问题]     系统性调试分析                               │
+│  /test [file]      生成测试代码                                 │
+│  /doc [file]       生成文档                                     │
+├─ 系统命令 ────────────────────────────────────────────────────────┤
+│  /health           系统健康检查                                 │
+│  /memory           记忆系统摘要                                 │
+│  /usagestats       使用统计（会话数/天数/模型用量）             │
+│  /credit           信用监控状态                                 │
+│  /stats            流水线执行统计                               │
+│  /token            Token 预算统计                               │
+│  /evolve           触发进化引擎                                 │
+│  /antibody         抗体库状态                                   │
+│  /fusion           自动融合引擎状态                             │
+│  /route <消息>     测试路由决策（不实际调用模型）               │
+│  /topup            切回三方 API（信用兜底）                     │
+│  /quit, /q         退出                                         │
+└─────────────────────────────────────────────────────────────────┘
+""")
+
             continue
 
         # 普通消息
-        response = giraffe.chat(user_input)
+        response = giraffe.chat(
+            user_input,
+            model_override=_model_override,
+            tier_override=_tier_override,
+        )
         print(f"\nGiraffe> {response}\n")
-
 
 if __name__ == "__main__":
     main()

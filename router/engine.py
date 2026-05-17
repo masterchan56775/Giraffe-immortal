@@ -152,6 +152,29 @@ class RouterEngine:
             # ── 获取模型降级链 ────────────────────────────────────────────────
             model_chain = self._model_registry.get_model_chain(task_type.value)
 
+            # ── 熔断感知路由：跳过已熔断的模型 ───────────────────────────────
+            try:
+                from executor.circuit_breaker import CircuitBreakerRegistry
+                _cb_registry = CircuitBreakerRegistry.get()
+                _healthy_model = model_chain[0]  # 默认使用 primary
+                for _candidate in model_chain:
+                    if not _cb_registry.get_breaker(_candidate).is_open:
+                        _healthy_model = _candidate
+                        break
+                else:
+                    # 全链路熔断，仍用 primary（等待冷却后自动恢复）
+                    _healthy_model = model_chain[0]
+                if _healthy_model != model_chain[0]:
+                    logger.warning(
+                        f"[Router] 主模型 {model_chain[0]} 熔断中，"
+                        f"降级至 {_healthy_model}"
+                    )
+                # 重排链路：把健康模型排到最前
+                _idx = model_chain.index(_healthy_model)
+                model_chain = model_chain[_idx:] + model_chain[:_idx]
+            except Exception as _cb_err:
+                logger.debug(f"[Router] 熔断感知检查失败（忽略）: {_cb_err}")
+
             t_end = time.perf_counter()
             latency_ms = (t_end - t_start) * 1000
 

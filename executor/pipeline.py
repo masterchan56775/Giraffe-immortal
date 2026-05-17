@@ -18,9 +18,9 @@ from .task_decomposer import TaskDecomposer
 
 from observability.tracer import get_tracer
 from integration.event_stream import EventBus
+from executor.circuit_breaker import CircuitBreakerRegistry
 
 logger = logging.getLogger(__name__)
-
 
 @dataclass
 class ExecutionContext:
@@ -37,6 +37,8 @@ class ExecutionContext:
     use_cache: bool = True
     images: list[str] = field(default_factory=list)
     mcp_tools: list[dict] = field(default_factory=list)  # MCP工具描述列表
+    use_tools: bool = False          # 是否启用 AgenticLoop（tool_use 循环）
+    enabled_tools: list[str] | None = None  # None=全部；否则指定工具名
 
     # 执行过程中填充
     approved: bool = True
@@ -44,6 +46,8 @@ class ExecutionContext:
     cache_hit: bool = False
     response: str = ""
     error: str | None = None
+    truncated: bool = False          # 回复是否因 max_tokens 被截断
+    fallback_models: list[str] = field(default_factory=list)  # 降级模型链
     stage_times: dict[str, float] = field(default_factory=dict)
 
     def record_stage(self, stage: str, duration_ms: float) -> None:
@@ -65,7 +69,6 @@ class ExecutionContext:
                 f"[ExecutionContext] model 必须是非空字符串，得到 {self.model!r}。"
             )
 
-
 @dataclass
 class ExecutionResult:
     """执行管道最终结果。"""
@@ -78,6 +81,7 @@ class ExecutionResult:
     stage_times: dict[str, float] = field(default_factory=dict)
     error: str | None = None
     tokens_used: int = 0
+    truncated: bool = False          # 是否被 max_tokens 截断
 
     def to_dict(self) -> dict:
         return {
@@ -88,7 +92,6 @@ class ExecutionResult:
             "total_ms": self.total_ms,
             "error": self.error,
         }
-
 
 class ExecutorPipeline:
     """
@@ -179,6 +182,7 @@ class ExecutorPipeline:
             "max_tokens": ctx.max_tokens,
             "temperature": ctx.temperature,
             "use_cache": ctx.use_cache,
+            "fallback_models": list(ctx.fallback_models),
             "approved": True,
             "approval_reason": "",
             "cache_hit": False,
@@ -302,8 +306,8 @@ class ExecutorPipeline:
             total_ms=round(total_ms, 2),
             stage_times=final_state.get("stage_times", {}),
             error=error,
+            truncated=final_state.get("truncated", False),
         )
-
 
     # ─── 各阶段实现 ────────────────────────────────────────────────────────────
     def _stage_decompose(self, ctx: ExecutionContext):
@@ -348,6 +352,12 @@ class ExecutorPipeline:
     def _stage_api_call(self, ctx: ExecutionContext) -> ExecutionContext:
         t = time.perf_counter()
 
+        # ── AgenticLoop 分支（tool_use 循环）──────────────────────────────────
+        if ctx.use_tools:
+            ctx.response = self._run_agentic(ctx)
+            ctx.record_stage("api_call", (time.perf_counter() - t) * 1000)
+            return ctx
+
         # 先查缓存
         if ctx.use_cache:
             cached = self._cache.get(ctx.message, ctx.model)
@@ -377,20 +387,90 @@ class ExecutorPipeline:
         ctx.record_stage("api_call", (time.perf_counter() - t) * 1000)
         return ctx
 
+    def _run_agentic(self, ctx: ExecutionContext) -> str:
+        """
+        调用 AgenticLoop 执行 streaming tool_use 循环。
+        。
+        """
+        from executor.agentic_loop import run_agentic
+        from tools import build_tool_registry
+
+        tools = build_tool_registry(ctx.enabled_tools)
+
+        # 判断 provider
+        if ctx.model.startswith("claude-"):
+            provider = "claude"
+            from core.config import GiraffeConfig
+            _cfg = GiraffeConfig.get()
+            project = _cfg.get_value("router.primary_model.project") or None
+            region = _cfg.get_value("router.claude_location") or "global"
+            from anthropic import AnthropicVertex
+            client = AnthropicVertex(project_id=project, region=region)
+        elif "grok" in ctx.model.lower():
+            provider = "grok"
+            from openai import OpenAI
+            import google.auth
+            import google.auth.transport.requests
+            creds, project = google.auth.default(
+                scopes=["https://www.googleapis.com/auth/cloud-platform"]
+            )
+            creds.refresh(google.auth.transport.requests.Request())
+            client = OpenAI(
+                base_url=f"https://aiplatform.googleapis.com/v1/projects/{project}/locations/global/endpoints/openapi",
+                api_key=creds.token,
+            )
+        else:
+            provider = "gemini"
+            from google import genai
+            client = genai.Client()
+
+        def _on_text(t: str):
+            print(t, end="", flush=True)
+
+        def _on_tool_start(name: str, args: dict):
+            logger.info(f"[AgenticLoop] 调用工具: {name}")
+
+        def _on_tool_done(uid: str, result):
+            status = "✅" if not result.is_error else "❌"
+            logger.info(f"[AgenticLoop] 工具完成 {status}: {uid}")
+
+        agentic_result = run_agentic(
+            provider=provider,
+            client=client,
+            model=ctx.model,
+            tools=tools,
+            user_message=ctx.message,
+            system=ctx.system_prompt,
+            history=ctx.messages,
+            config={"max_tokens": ctx.max_tokens},
+            on_text=_on_text,
+            on_tool_start=_on_tool_start,
+            on_tool_done=_on_tool_done,
+        )
+
+        if agentic_result.error:
+            ctx.error = agentic_result.error
+            return f"[AgenticLoop 错误] {agentic_result.error}"
+
+        logger.info(
+            f"[AgenticLoop] 完成: turns={agentic_result.turns} "
+            f"tool_calls={agentic_result.tool_calls_made}"
+        )
+        return agentic_result.final_text
+
     def _build_messages(self, ctx: ExecutionContext) -> list[dict]:
         """构建发送给API的消息列表。支持多模态图像输入。"""
         msgs = []
         if ctx.system_prompt:
             msgs.append({"role": "system", "content": ctx.system_prompt})
         msgs.extend(ctx.messages or [])
-        if not any(m.get("role") == "user" for m in msgs):
-            # 多模态：如果有图片，构建 Vision API 格式的 content
-            if ctx.images:
-                from integration.multimodal import build_multimodal_content
-                content = build_multimodal_content(ctx.message, ctx.images)
-                msgs.append({"role": "user", "content": content})
-            else:
-                msgs.append({"role": "user", "content": ctx.message})
+        # 始终将当前用户消息追加到末尾（ctx.messages 是历史，ctx.message 是本次新消息）
+        if ctx.images:
+            from integration.multimodal import build_multimodal_content
+            content = build_multimodal_content(ctx.message, ctx.images)
+            msgs.append({"role": "user", "content": content})
+        else:
+            msgs.append({"role": "user", "content": ctx.message})
         return msgs
 
     def _call_api(self, ctx: ExecutionContext, messages: list[dict]) -> str:
@@ -398,6 +478,22 @@ class ExecutorPipeline:
         use_adc = not ctx.api_key or ctx.api_key.startswith("${")
 
         if use_adc:
+            from core.config import GiraffeConfig
+            _cfg = GiraffeConfig.get()
+            _project = _cfg.get_value("router.primary_model.project") or None
+
+            # ── Claude (Anthropic Vertex) ──────────────────────────────────────
+            # Claude 在 Vertex AI 上使用 rawPredict + Anthropic Messages API，
+            # 与 Gemini 的 generateContent 完全不同。
+            if ctx.model.startswith("claude-"):
+                return self._call_claude_rawpredict(ctx, messages, _project, _cfg)
+
+            # ── Grok (xAI — OpenAI-compatible) ────────────────────────────────
+            # Grok 使用 xAI API，兼容 OpenAI Chat Completions 格式。
+            # 需要环境变量 XAI_API_KEY。
+            if "grok" in ctx.model.lower():
+                return self._call_grok_xai(ctx, messages)
+
             try:
                 from google import genai
                 from google.genai import types
@@ -412,21 +508,23 @@ class ExecutorPipeline:
                 if role == "system":
                     system_instruction = content
                     continue
-                
+
                 gemini_role = "model" if role == "assistant" else "user"
                 if isinstance(content, list):
                     parts = []
                     for p in content:
                         if p.get("type") == "text":
-                            parts.append(types.Part.from_text(p["text"]))
-                        # TODO: 处理多模态图片映射
+                            parts.append(types.Part(text=p["text"]))
                     if parts:
                         contents.append(types.Content(role=gemini_role, parts=parts))
                 else:
-                    contents.append(types.Content(role=gemini_role, parts=[types.Part.from_text(str(content))]))
+                    contents.append(types.Content(role=gemini_role, parts=[types.Part(text=str(content))]))
 
             try:
-                client = genai.Client(vertexai=True)
+                _location = _cfg.get_value("router.primary_model.location") or "global"
+                client = genai.Client(vertexai=True, project=_project, location=_location)
+                logger.debug(f"[API] Gemini 调用: model={ctx.model} location={_location}")
+
                 config = types.GenerateContentConfig(
                     temperature=ctx.temperature,
                     max_output_tokens=ctx.max_tokens,
@@ -437,11 +535,34 @@ class ExecutorPipeline:
                     contents=contents,
                     config=config,
                 )
-                
+
                 # 检查信用状态
                 if self._credit_monitor:
                     self._credit_monitor.check_credit(200, ctx.model)
-                return response.text
+                # response.text 在 thinking-only 或空响应时可能为 None
+                text = response.text
+                if text is None:
+                    try:
+                        parts = []
+                        for cand in response.candidates:
+                            for part in cand.content.parts:
+                                if hasattr(part, 'text') and part.text:
+                                    parts.append(part.text)
+                        text = "\n".join(parts) if parts else ""
+                    except Exception:
+                        text = ""
+                # 检测 finish_reason：若因 max_tokens 截断，标记上下文不进记忆
+                try:
+                    finish_reason = response.candidates[0].finish_reason
+                    if str(finish_reason).upper() in ('MAX_TOKENS', 'FINISHREASON.MAX_TOKENS', '2'):
+                        ctx.truncated = True
+                        logger.warning(
+                            f"[API] 回复被 max_tokens={ctx.max_tokens} 截断 "
+                            f"(model={ctx.model})，建议增大 max_tokens"
+                        )
+                except Exception:
+                    pass
+                return text
             except Exception as e:
                 try:
                     from google.api_core.exceptions import GoogleAPIError
@@ -484,7 +605,175 @@ class ExecutorPipeline:
                     self._credit_monitor.check_credit(e.code, ctx.model)
                 raise
 
+    def _call_grok_xai(
+        self,
+        ctx: ExecutionContext,
+        messages: list[dict],
+    ) -> str:
+        """
+        调用 xAI Grok 模型（通过 Vertex AI OpenAI-compatible 端点）。
+
+        认证：和 Gemini/Claude 一样使用 Google Cloud ADC（无需额外密钥）
+        端点： https://aiplatform.googleapis.com/v1/projects/{project}/locations/global/endpoints/openapi
+        格式： OpenAI-compatible Chat Completions
+        模型名： xai/grok-4.20-reasoning
+        文档： https://console.cloud.google.com/vertex-ai/publishers/xai/model-garden/grok-4.20-reasoning
+        依赖： pip install openai google-auth
+        """
+        try:
+            from openai import OpenAI
+        except ImportError:
+            raise RuntimeError(
+                "[Grok] 需要安装 openai 包: pip install openai"
+            )
+
+        # 获取 ADC 令牌（和 Gemini/Claude 一致，无需额外配置）
+        try:
+            import google.auth
+            import google.auth.transport.requests
+            credentials, _ = google.auth.default(
+                scopes=["https://www.googleapis.com/auth/cloud-platform"]
+            )
+            credentials.refresh(google.auth.transport.requests.Request())
+            token = credentials.token
+        except Exception as e:
+            raise RuntimeError(
+                f"[Grok] ADC 认证失败: {e}\n"
+                "请运行: gcloud auth application-default login"
+            )
+
+        from core.config import GiraffeConfig
+        _cfg = GiraffeConfig.get()
+        project = _cfg.get_value("router.primary_model.project") or ""
+        if not project:
+            raise RuntimeError("[Grok] 配置中缺少 router.primary_model.project")
+
+        base_url = (
+            f"https://aiplatform.googleapis.com/v1/projects/{project}"
+            f"/locations/global/endpoints/openapi"
+        )
+
+        client = OpenAI(
+            api_key=token,       # ADC Bearer Token
+            base_url=base_url,
+        )
+
+        # 构建消息列表
+        openai_msgs: list[dict] = []
+        if ctx.system_prompt:
+            openai_msgs.append({"role": "system", "content": ctx.system_prompt})
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if role in ("user", "assistant", "system"):
+                openai_msgs.append({"role": role, "content": str(content)})
+        if not openai_msgs or openai_msgs[-1]["role"] != "user":
+            openai_msgs.append({"role": "user", "content": ctx.message})
+
+        logger.debug(
+            f"[Grok] Vertex AI 调用: model={ctx.model} "
+            f"project={project} msgs={len(openai_msgs)}"
+        )
+
+        try:
+            response = client.chat.completions.create(
+                model=ctx.model,          # 应为 "xai/grok-4.20-reasoning"
+                messages=openai_msgs,
+                max_tokens=ctx.max_tokens,
+                temperature=ctx.temperature,
+            )
+            if self._credit_monitor:
+                self._credit_monitor.check_credit(200, ctx.model)
+
+            choice = response.choices[0]
+            if choice.finish_reason == "length":
+                ctx.truncated = True
+                logger.warning(
+                    f"[Grok] 回复被 max_tokens={ctx.max_tokens} 截断 (model={ctx.model})"
+                )
+            return choice.message.content or ""
+
+        except Exception as e:
+            if self._credit_monitor:
+                code = getattr(e, "status_code", 500)
+                self._credit_monitor.check_credit(code, ctx.model)
+            raise
+
+    def _call_claude_rawpredict(
+        self,
+        ctx: ExecutionContext,
+        messages: list[dict],
+        project: str,
+        cfg,
+    ) -> str:
+        """
+        Claude on Vertex AI 专用调用路径。
+        使用官方 AnthropicVertex SDK（anthropic>=0.20），通过 ADC 自动认证。
+
+        官方文档: https://docs.anthropic.com/en/api/claude-on-vertex-ai
+        推荐端点: region="global"（最大可用性，无额外费用）
+        """
+        try:
+            from anthropic import AnthropicVertex
+        except ImportError:
+            raise RuntimeError(
+                "[Claude] 需要安装 anthropic 包: pip install anthropic"
+            )
+
+        # 解析 messages：将 system 和 user/assistant 分开
+        system_content = None
+        anthropic_messages = []
+        for m in messages:
+            role = m.get("role")
+            content = m.get("content", "")
+            if role == "system":
+                system_content = content
+            elif role in ("user", "assistant"):
+                if isinstance(content, list):
+                    anthropic_messages.append({"role": role, "content": content})
+                else:
+                    anthropic_messages.append({"role": role, "content": str(content)})
+
+        if not anthropic_messages:
+            anthropic_messages = [{"role": "user", "content": ctx.message}]
+
+        # 官方推荐 region="global"（Claude Sonnet 4.6 及以上均支持）
+        _region = cfg.get_value("router.claude_location") or "global"
+        logger.debug(f"[Claude] AnthropicVertex: model={ctx.model} region={_region}")
+
+        client = AnthropicVertex(project_id=project, region=_region)
+
+        kwargs = {
+            "model": ctx.model,
+            "max_tokens": ctx.max_tokens,
+            "messages": anthropic_messages,
+            "temperature": ctx.temperature,
+        }
+        if system_content:
+            kwargs["system"] = system_content
+
+        response = client.messages.create(**kwargs)
+
+        if self._credit_monitor:
+            self._credit_monitor.check_credit(200, ctx.model)
+
+        # 提取文本
+        text = "\n".join(
+            block.text for block in response.content
+            if hasattr(block, "text") and block.text
+        )
+
+        # 检测截断
+        if response.stop_reason == "max_tokens":
+            ctx.truncated = True
+            logger.warning(
+                f"[Claude] 回复被 max_tokens={ctx.max_tokens} 截断 (model={ctx.model})"
+            )
+
+        return text
+
     def _stage_parallel_execute(self, ctx: ExecutionContext, decomposed) -> ExecutionContext:
+
         """阶段8（多子任务路径）：并行调用 API 执行每个子任务，聚合结果。"""
         from .parallel_executor import SubAgentTask as PExecTask
         t = time.perf_counter()

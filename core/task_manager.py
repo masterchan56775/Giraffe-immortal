@@ -173,8 +173,8 @@ class TaskManager:
         for cb in self._hooks.get(event, []):
             try:
                 cb(task)
-            except Exception:
-                pass  # 钩子失败不影响主流程
+            except Exception as e:
+                logger.debug(f"[TaskManager] 钩子回调失败({event}): {e}")  # 钩子失败不影响主流程
 
     # ─── 统计 ─────────────────────────────────────────────────────────────────
     def stats(self) -> dict:
