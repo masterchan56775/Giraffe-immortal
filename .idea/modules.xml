@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/Giraffe-immortal.iml" filepath="$PROJECT_DIR$/.idea/Giraffe-immortal.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/giraffe-immortal.iml" filepath="$PROJECT_DIR$/.idea/giraffe-immortal.iml" />
     </modules>
   </component>
 </project>
