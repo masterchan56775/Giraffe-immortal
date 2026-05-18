@@ -254,3 +254,8 @@ __marimo__/
 /data/
 /core/
 /adapt/
+/build_exe.py
+/assets/giraffe.ico
+/assets/giraffe.png
+/giraffe_launcher.py
+/giraffe_setup.iss

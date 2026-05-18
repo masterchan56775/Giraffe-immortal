@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import AsyncGenerator, Callable
 
 from tools.base import BaseTool, PermissionResult, ToolContext, ToolResult
+from executor.tool_result_store import maybe_persist
 
 logger = logging.getLogger("agentic_loop")
 
@@ -414,6 +415,7 @@ class AgenticLoop:
             result = ToolResult(content=f"工具执行异常：{e}", is_error=True)
 
         result.tool_use_id = call.tool_use_id
+        result.tool_name = call.name          # 供持久化存储使用
         result = tool.truncate_result(result)
         return result
 
@@ -533,13 +535,17 @@ class AgenticLoop:
                 self.on_tool_done(r.tool_use_id, r)
                 i += 1
 
-        # 构建 tool_result user message
+        # 构建 tool_result user message（大结果写磁盘，只保留预览）
         tool_result_content: list[dict] = []
         for r in results:
+            raw = r.content if isinstance(r.content, str) else json.dumps(r.content)
+            # 错误结果不持久化（通常较短且需完整展示）
+            if not r.is_error:
+                raw = maybe_persist(r.tool_use_id, r.tool_name or "tool", raw)
             tool_result_content.append({
                 "type": "tool_result",
                 "tool_use_id": r.tool_use_id,
-                "content": r.content if isinstance(r.content, str) else json.dumps(r.content),
+                "content": raw,
                 "is_error": r.is_error,
             })
 

@@ -102,8 +102,9 @@ class TestModelRegistry:
 
     def test_fallback_chain_order(self):
         chain = self.reg.get_model_chain("reasoning")
-        assert chain[0] == "opus-4.7"
-        assert chain[1] == "claude-sonnet-4.6"
+        assert chain[0] == "claude-sonnet-4-6"
+        assert chain[1] == "xai/grok-4.20-reasoning"
+        assert chain[2] == "gemini-3.1-pro-preview"
 
     def test_all_task_types_have_chains(self):
         for task_type in self.reg.list_task_types():

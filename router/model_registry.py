@@ -36,37 +36,44 @@ class ModelConfig:
             "temperature": self.temperature,
         }
 
-# 默认模型矩阵
-# 路由设计：
-#   Grok  (grok-4.20-reasoning)    ← agent_task, repo_analysis, search
-#   Claude (claude-sonnet-4-6)     ← reasoning, code_large
-#   Gemini (其他所有)              ← chat, code_small, code_medium, reasoning_light, vision
+# 默认模型矩阵（3级回退策略）
+# 降级顺序：Claude（主力）→ Grok（备选）→ Gemini Pro → Gemini Flash（兜底）
+#
+#   Claude claude-sonnet-4-6       ← 所有非轻量任务的首选
+#   Grok  xai/grok-4.20-reasoning  ← Claude 不可用时接管
+#   Gemini Pro  gemini-3.1-pro-preview  ← 第三级
+#   Gemini Flash gemini-3-flash-preview ← 最终兜底
 DEFAULT_MODEL_MATRIX: dict[str, dict[ModelLevel, str]] = {
-    # ── Gemini Pro 层（通用任务） ───────────────────────────────────────────────────
-    "chat":             {"primary": "gemini-3.1-pro-preview",  "fallback": "gemini-3-flash-preview",  "emergency": "gemini-3.1-flash-lite"},
-    "code_small":       {"primary": "gemini-3.1-pro-preview",  "fallback": "gemini-3-flash-preview",  "emergency": "gemini-3.1-flash-lite"},
-    "code_medium":      {"primary": "gemini-3.1-pro-preview",  "fallback": "gemini-3-flash-preview",  "emergency": "gemini-3.1-flash-lite"},
-    "reasoning_light":  {"primary": "gemini-3.1-pro-preview",  "fallback": "gemini-3-flash-preview",  "emergency": "gemini-3.1-flash-lite"},
-    "vision":           {"primary": "gemini-3.1-pro-preview",  "fallback": "gemini-3-flash-preview",  "emergency": "gemini-3.1-flash-lite"},
-    "routing":          {"primary": "gemini-3.1-flash-lite",   "fallback": "gemini-3-flash-preview",  "emergency": "gemini-3.1-flash-lite"},
-    "subtask":          {"primary": "gemini-3.1-pro-preview",  "fallback": "gemini-3-flash-preview",  "emergency": "gemini-3.1-flash-lite"},
+    # ── 路由/轻量任务（meta 层，优先低延迟） ──────────────────────────────
+    "routing":          {"primary": "gemini-3-flash-preview",   "fallback": "gemini-3.1-pro-preview",     "emergency": "gemini-3.1-flash-lite"},
 
-    # ── Claude 层（严肃研究 + 系统级编码） ───────────────────────────────────
-    "reasoning":        {"primary": "claude-sonnet-4-6",       "fallback": "gemini-3.1-pro-preview",  "emergency": "gemini-3-flash-preview"},
-    "code_large":       {"primary": "claude-sonnet-4-6",       "fallback": "gemini-3.1-pro-preview",  "emergency": "gemini-3-flash-preview"},
+    # ── 通用对话/视觉（Claude 优先，Grok 备选，Gemini 兜底） ──────────────
+    "chat":             {"primary": "claude-sonnet-4-6",        "fallback": "xai/grok-4.20-reasoning",    "emergency": "gemini-3.1-pro-preview"},
+    "vision":           {"primary": "claude-sonnet-4-6",        "fallback": "xai/grok-4.20-reasoning",    "emergency": "gemini-3.1-pro-preview"},
 
-    # ── Grok 层（自动化 Agent + 热点追踪 + 长仓库分析） ────────────────
-    "agent_task":       {"primary": "xai/grok-4.20-reasoning",     "fallback": "claude-sonnet-4-6",       "emergency": "gemini-3.1-pro-preview"},
-    "repo_analysis":    {"primary": "xai/grok-4.20-reasoning",     "fallback": "claude-sonnet-4-6",       "emergency": "gemini-3.1-pro-preview"},
-    "search":           {"primary": "xai/grok-4.20-reasoning",     "fallback": "gemini-3.1-pro-preview",  "emergency": "gemini-3-flash-preview"},
+    # ── 编码任务（Claude 优先，Grok 备选，Gemini Pro 兜底） ──────────────
+    "code_small":       {"primary": "claude-sonnet-4-6",        "fallback": "xai/grok-4.20-reasoning",    "emergency": "gemini-3.1-pro-preview"},
+    "code_medium":      {"primary": "claude-sonnet-4-6",        "fallback": "xai/grok-4.20-reasoning",    "emergency": "gemini-3.1-pro-preview"},
+    "code_large":       {"primary": "claude-sonnet-4-6",        "fallback": "xai/grok-4.20-reasoning",    "emergency": "gemini-3.1-pro-preview"},
+    "subtask":          {"primary": "claude-sonnet-4-6",        "fallback": "xai/grok-4.20-reasoning",    "emergency": "gemini-3.1-pro-preview"},
+
+    # ── 推理任务（Claude 优先，Grok 备选，Gemini Pro 兜底） ──────────────
+    "reasoning_light":  {"primary": "claude-sonnet-4-6",        "fallback": "xai/grok-4.20-reasoning",    "emergency": "gemini-3.1-pro-preview"},
+    "reasoning":        {"primary": "claude-sonnet-4-6",        "fallback": "xai/grok-4.20-reasoning",    "emergency": "gemini-3.1-pro-preview"},
+
+    # ── Agent/搜索任务（Claude 优先，Grok 备选，Gemini Pro 兜底） ────────
+    "agent_task":       {"primary": "claude-sonnet-4-6",        "fallback": "xai/grok-4.20-reasoning",    "emergency": "gemini-3.1-pro-preview"},
+    "repo_analysis":    {"primary": "claude-sonnet-4-6",        "fallback": "xai/grok-4.20-reasoning",    "emergency": "gemini-3.1-pro-preview"},
+    "search":           {"primary": "claude-sonnet-4-6",        "fallback": "xai/grok-4.20-reasoning",    "emergency": "gemini-3.1-pro-preview"},
 }
 
-# 子Agent路由矩阵
+# 子Agent路由矩阵（与 subagent_router.py SUBAGENT_MODEL_MAP 对齐）
 SUBAGENT_MATRIX: dict[str, str] = {
     "text_reasoning": "gemini-3-flash-preview",
-    "code":           "claude-sonnet-4.6",
-    "deep_reasoning": "claude-opus-4.7",
-    "multi_model":    "opus-4.7+gpt-5.5",
+    "code":           "claude-sonnet-4-6",
+    "deep_reasoning": "claude-sonnet-4-6",
+    "multi_model":    "claude-sonnet-4-6",
+    "vision":         "claude-sonnet-4-6",
 }
 
 class ModelRegistry:

@@ -1,97 +1,89 @@
 """
-memory/vector_store.py — 向量存储管理器
+memory/vector_store.py — LLM 驱动的语义记忆检索
 
-基于 ChromaDB 的本地向量数据库封装，提供语义检索能力。
-当 ChromaDB 或 sentence-transformers 未安装时，自动降级为禁用状态。
+用 LLM side query 替代 ChromaDB + sentence-transformers 向量嵌入。
+设计灵感来自 src/memdir/findRelevantMemories.ts：
+  1. 记忆以 JSON 条目存储（text + metadata），持久化到本地文件
+  2. 检索时把所有记忆摘要列表发给小模型，由 LLM 判断哪些与查询相关
+  3. 支持任意已配置的模型（Claude / Gemini / Grok / OpenAI / 等）
+
+优点：
+  - 零额外依赖（不需要 PyTorch / ChromaDB / sentence-transformers）
+  - 与主路由矩阵共用模型，自动跟随用户配置的提供商
+  - 语义理解质量与主模型相同
 """
 from __future__ import annotations
 
+import json
 import logging
+import re
+import uuid
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# ─── 可选依赖检测 ─────────────────────────────────────────────────────────────
-_CHROMA_AVAILABLE = False
-_EMBEDDING_AVAILABLE = False
+# 每次 search() 发送给 LLM 的最大记忆条目数（保护 context window）
+_MAX_ENTRIES_FOR_LLM = 200
+# LLM 返回的最大结果数
+_MAX_LLM_RESULTS = 10
+# 摘要截断长度（字符），避免超长条目塞爆 prompt
+_PREVIEW_LEN = 120
+# 本地存储文件名
+_STORE_FILENAME = "llm_memory_store.json"
 
-try:
-    import chromadb
-    from chromadb.config import Settings
+_SELECT_SYSTEM = """\
+You are a memory relevance selector for an AI assistant.
+Given a user query and a numbered list of stored memory entries,
+return the indices of entries that are clearly relevant to the query.
 
-    _CHROMA_AVAILABLE = True
-except ImportError:
-    chromadb = None  # type: ignore
-
-try:
-    from sentence_transformers import SentenceTransformer
-
-    _EMBEDDING_AVAILABLE = True
-except ImportError:
-    SentenceTransformer = None  # type: ignore
+Rules:
+- Only include entries that will genuinely help answer the query.
+- Be selective — if unsure, leave it out.
+- Return ONLY a JSON array of integers, e.g.: [0, 3, 7]
+- If nothing is relevant, return: []
+"""
 
 
 class VectorStore:
     """
-    基于 ChromaDB 的向量存储。
+    LLM 驱动的语义记忆存储，完全兼容原 ChromaDB 版本的公共 API。
 
-    功能：
-    - add(): 将文本向量化后写入本地持久化集合
-    - search(): 语义检索，返回与 query 最相似的 top_k 条结果
-    - delete(): 删除指定文档
-    - stats(): 返回集合大小等统计信息
-
-    当依赖未安装时，所有方法安全降级为空操作。
+    接口：
+      add(doc_id, text, metadata)  → 写入一条记忆
+      search(query, top_k)         → LLM 语义检索，返回最相关条目
+      delete(doc_id)               → 删除指定记忆
+      count()                      → 返回总条目数
+      stats()                      → 返回统计信息
     """
 
     def __init__(
         self,
         persist_dir: Path | str | None = None,
         collection_name: str = "giraffe_memory",
-        embedding_model: str = "all-MiniLM-L6-v2",
+        embedding_model: str = "",   # 保留参数，LLM 模式下忽略
+        llm_model: str | None = None,  # 指定用于检索的 LLM；None=从路由器获取
     ) -> None:
-        self._enabled = False
-        self._client = None
-        self._collection = None
-        self._embedder = None
         self._persist_dir = Path(persist_dir) if persist_dir else None
+        self._collection_name = collection_name
+        self._llm_model = llm_model  # None 表示运行时动态获取
+        self._enabled = True
 
-        if not _CHROMA_AVAILABLE:
-            logger.info("[VectorStore] chromadb 未安装，向量检索已禁用")
-            return
+        # 内存中的记忆条目：{doc_id: {"text": str, "metadata": dict}}
+        self._store: dict[str, dict[str, Any]] = {}
 
-        try:
-            if self._persist_dir:
-                self._persist_dir.mkdir(parents=True, exist_ok=True)
-                self._client = chromadb.PersistentClient(
-                    path=str(self._persist_dir),
-                    settings=Settings(anonymized_telemetry=False),
-                )
-            else:
-                self._client = chromadb.Client(
-                    settings=Settings(anonymized_telemetry=False),
-                )
+        # 持久化路径
+        self._store_path: Path | None = None
+        if self._persist_dir:
+            self._persist_dir.mkdir(parents=True, exist_ok=True)
+            self._store_path = self._persist_dir / _STORE_FILENAME
+            self._load()
 
-            self._collection = self._client.get_or_create_collection(
-                name=collection_name,
-                metadata={"hnsw:space": "cosine"},
-            )
-
-            if _EMBEDDING_AVAILABLE:
-                self._embedder = SentenceTransformer(embedding_model)
-                logger.info(
-                    f"[VectorStore] 已初始化 (model={embedding_model}, "
-                    f"collection={collection_name}, docs={self._collection.count()})"
-                )
-            else:
-                logger.info(
-                    "[VectorStore] sentence-transformers 未安装，使用 ChromaDB 默认嵌入"
-                )
-
-            self._enabled = True
-        except Exception as e:
-            logger.warning(f"[VectorStore] 初始化失败: {e}")
+        logger.info(
+            f"[VectorStore] LLM 模式已初始化"
+            f"（entries={len(self._store)}, "
+            f"persist={'是' if self._store_path else '否'}）"
+        )
 
     @property
     def enabled(self) -> bool:
@@ -99,116 +91,186 @@ class VectorStore:
 
     # ─── 写入 ─────────────────────────────────────────────────────────────────
     def add(self, doc_id: str, text: str, metadata: dict | None = None) -> bool:
-        """
-        将文本向量化后写入集合。
-
-        Args:
-            doc_id: 文档唯一标识
-            text: 文本内容
-            metadata: 附加元数据（如 category, confidence）
-
-        Returns:
-            是否写入成功
-        """
-        if not self._enabled or not self._collection:
+        """写入一条记忆条目。若 doc_id 已存在则覆盖（upsert）。"""
+        if not text or not text.strip():
             return False
-
-        try:
-            kwargs: dict[str, Any] = {
-                "ids": [doc_id],
-                "documents": [text],
-            }
-            if metadata:
-                # ChromaDB 要求 metadata 的值只能是 str/int/float/bool
-                safe_meta = {
-                    k: v for k, v in metadata.items()
-                    if isinstance(v, (str, int, float, bool))
-                }
-                kwargs["metadatas"] = [safe_meta]
-            if self._embedder:
-                embedding = self._embedder.encode([text]).tolist()
-                kwargs["embeddings"] = embedding
-
-            self._collection.upsert(**kwargs)
-            return True
-        except Exception as e:
-            logger.warning(f"[VectorStore] 写入失败 ({doc_id}): {e}")
-            return False
+        self._store[doc_id] = {
+            "text": text,
+            "metadata": metadata or {},
+        }
+        self._save()
+        return True
 
     # ─── 检索 ─────────────────────────────────────────────────────────────────
     def search(self, query: str, top_k: int = 5) -> list[dict]:
         """
-        语义检索，返回与 query 最相似的 top_k 条结果。
+        LLM 语义检索：发送记忆摘要清单给小模型，由模型选出最相关条目。
 
         Returns:
-            [{"id": ..., "text": ..., "distance": ..., "metadata": ...}, ...]
+            [{\"id\": ..., \"text\": ..., \"distance\": ..., \"metadata\": ...}, ...]
+            distance 字段保留兼容性（LLM 模式下固定为 0.1，表示高相关）
         """
-        if not self._enabled or not self._collection:
+        if not self._store or not query.strip():
             return []
 
-        try:
-            kwargs: dict[str, Any] = {
-                "query_texts": [query],
-                "n_results": min(top_k, self._collection.count() or 1),
-            }
-            if self._embedder:
-                query_embedding = self._embedder.encode([query]).tolist()
-                kwargs = {
-                    "query_embeddings": query_embedding,
-                    "n_results": min(top_k, self._collection.count() or 1),
-                }
+        entries = list(self._store.items())  # [(doc_id, {text, metadata})]
 
-            results = self._collection.query(**kwargs)
+        # 超出上限时取最新的（靠后写入的 dict key，Python 3.7+ 保持插入顺序）
+        if len(entries) > _MAX_ENTRIES_FOR_LLM:
+            entries = entries[-_MAX_ENTRIES_FOR_LLM:]
 
-            items = []
-            if results and results["ids"] and results["ids"][0]:
-                ids = results["ids"][0]
-                docs = results["documents"][0] if results["documents"] else [""] * len(ids)
-                dists = results["distances"][0] if results["distances"] else [0.0] * len(ids)
-                metas = results["metadatas"][0] if results["metadatas"] else [{}] * len(ids)
+        # 构建编号清单
+        manifest_lines = []
+        for i, (doc_id, entry) in enumerate(entries):
+            preview = entry["text"][:_PREVIEW_LEN].replace("\n", " ")
+            meta = entry.get("metadata", {})
+            cat = meta.get("category", "")
+            tag = f"[{cat}] " if cat else ""
+            manifest_lines.append(f"{i}. {tag}{preview}")
 
-                for i, doc_id in enumerate(ids):
-                    items.append({
-                        "id": doc_id,
-                        "text": docs[i],
-                        "distance": round(dists[i], 4),
-                        "metadata": metas[i] if metas[i] else {},
-                    })
+        manifest = "\n".join(manifest_lines)
+        user_msg = (
+            f"Query: {query}\n\n"
+            f"Memory entries ({len(entries)} total):\n{manifest}"
+        )
 
-            return items
-        except Exception as e:
-            logger.warning(f"[VectorStore] 检索失败: {e}")
-            return []
+        # 调用 LLM 获取相关索引
+        selected_indices = self._llm_select(user_msg)
+
+        # 组装结果
+        results = []
+        for idx in selected_indices:
+            if 0 <= idx < len(entries):
+                doc_id, entry = entries[idx]
+                results.append({
+                    "id": doc_id,
+                    "text": entry["text"],
+                    "distance": 0.1,   # 固定低 distance（高相关）
+                    "metadata": entry.get("metadata", {}),
+                })
+                if len(results) >= top_k:
+                    break
+
+        logger.debug(
+            f"[VectorStore] 检索 '{query[:40]}...' "
+            f"→ {len(selected_indices)} 候选，返回 {len(results)} 条"
+        )
+        return results
 
     # ─── 删除 ─────────────────────────────────────────────────────────────────
     def delete(self, doc_id: str) -> bool:
-        """删除指定文档。"""
-        if not self._enabled or not self._collection:
-            return False
-        try:
-            self._collection.delete(ids=[doc_id])
+        if doc_id in self._store:
+            del self._store[doc_id]
+            self._save()
             return True
-        except Exception as e:
-            logger.warning(f"[VectorStore] 删除失败 ({doc_id}): {e}")
-            return False
+        return False
 
     # ─── 统计 ─────────────────────────────────────────────────────────────────
     def count(self) -> int:
-        """返回集合中的文档数量。"""
-        if not self._enabled or not self._collection:
-            return 0
-        try:
-            return self._collection.count()
-        except Exception:
-            return 0
+        return len(self._store)
 
     def stats(self) -> dict:
         return {
             "enabled": self._enabled,
+            "mode": "llm",
             "count": self.count(),
-            "embedding_model": (
-                self._embedder.get_sentence_embedding_dimension()
-                if self._embedder and hasattr(self._embedder, "get_sentence_embedding_dimension")
-                else None
-            ),
+            "embedding_model": None,  # LLM 模式无嵌入模型
+            "llm_model": self._llm_model or "(auto from router)",
         }
+
+    # ─── LLM 调用 ─────────────────────────────────────────────────────────────
+    def _llm_select(self, user_message: str) -> list[int]:
+        """
+        调用 LLM 选出相关记忆索引。
+        支持所有已配置的提供商（Claude / Gemini / Grok / OpenAI / 等）。
+        失败时静默返回空列表，不影响主流程。
+        """
+        model = self._resolve_model()
+        try:
+            from executor.pipeline import ExecutorPipeline, ExecutionContext
+            pipeline = ExecutorPipeline.get_default()
+            if pipeline is None:
+                return self._keyword_fallback(user_message)
+
+            ctx = ExecutionContext(
+                message=user_message,
+                model=model,
+                system_prompt=_SELECT_SYSTEM,
+                messages=[],
+                max_tokens=256,
+                use_cache=False,
+            )
+            result = pipeline.execute(ctx)
+            raw = (result.response or "").strip()
+            return self._parse_indices(raw)
+
+        except Exception as e:
+            logger.debug(f"[VectorStore] LLM 检索失败，降级关键词: {e}")
+            return self._keyword_fallback(user_message)
+
+    def _resolve_model(self) -> str:
+        """获取用于检索的模型名：优先使用配置的 llm_model，否则从路由器取最快小模型。"""
+        if self._llm_model:
+            return self._llm_model
+        try:
+            from router.model_registry import ModelRegistry
+            chain = ModelRegistry().get_model_chain("chat")
+            # 用 emergency（最快/最便宜）做 side query
+            return chain.get("emergency") or chain.get("fallback") or chain.get("primary", "")
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _parse_indices(raw: str) -> list[int]:
+        """从 LLM 输出中提取整数列表，容忍格式噪音。"""
+        # 尝试解析 JSON 数组
+        try:
+            match = re.search(r"\[[\d,\s]*\]", raw)
+            if match:
+                return [int(x) for x in json.loads(match.group()) if isinstance(x, int)]
+        except Exception:
+            pass
+        # 备用：提取所有数字
+        return [int(x) for x in re.findall(r"\d+", raw)]
+
+    def _keyword_fallback(self, user_message: str) -> list[int]:
+        """
+        LLM 不可用时的关键词降级：对 query 分词后做简单字符串匹配。
+        保证 search() 始终有结果返回。
+        """
+        # 从 user_message 中提取 query 部分（第一行 "Query: ..." ）
+        query_line = user_message.split("\n")[0]
+        query = re.sub(r"^Query:\s*", "", query_line, flags=re.I).lower()
+        keywords = set(re.findall(r"\w{2,}", query))
+        if not keywords:
+            return list(range(min(5, len(self._store))))
+
+        entries = list(self._store.values())
+        scored: list[tuple[int, int]] = []
+        for i, entry in enumerate(entries):
+            text_lower = entry["text"].lower()
+            score = sum(1 for kw in keywords if kw in text_lower)
+            if score > 0:
+                scored.append((i, score))
+
+        scored.sort(key=lambda x: x[1], reverse=True)
+        return [i for i, _ in scored[:_MAX_LLM_RESULTS]]
+
+    # ─── 持久化 ───────────────────────────────────────────────────────────────
+    def _load(self) -> None:
+        if self._store_path and self._store_path.exists():
+            try:
+                with open(self._store_path, encoding="utf-8") as f:
+                    self._store = json.load(f)
+                logger.info(f"[VectorStore] 加载 {len(self._store)} 条记忆")
+            except Exception as e:
+                logger.warning(f"[VectorStore] 加载失败: {e}")
+                self._store = {}
+
+    def _save(self) -> None:
+        if self._store_path:
+            try:
+                with open(self._store_path, "w", encoding="utf-8") as f:
+                    json.dump(self._store, f, ensure_ascii=False)
+            except Exception as e:
+                logger.warning(f"[VectorStore] 保存失败: {e}")

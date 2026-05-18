@@ -28,7 +28,10 @@ def get_api_provider() -> APIProvider:
 # ── 别名定义 ──────────────────────────────────────────────────────────────────
 
 # 族别名（匹配整个家族）
-MODEL_FAMILY_ALIASES = {"opus", "sonnet", "haiku", "flash", "grok", "lite"}
+MODEL_FAMILY_ALIASES = {
+    "opus", "sonnet", "haiku", "flash", "grok", "lite",
+    "gpt", "deepseek", "mistral", "codestral", "qwen", "moonshot", "command", "llama", "glm", "sonar"
+}
 
 # 特殊别名（需要特殊解析逻辑）
 MODEL_SPECIAL_ALIASES = {"opusplan", "best", "default"}
@@ -80,6 +83,20 @@ _GEMINI_MODELS = {
 # Grok 模型（xAI / Vertex AI）
 _GROK_MODELS = {
     "grok":    "xai/grok-4.20-reasoning",
+}
+
+# 其它模型默认最新版本（供别名快速调用）
+_OTHER_MODELS = {
+    "gpt":       "gpt-5.5",
+    "deepseek":  "deepseek-chat",
+    "mistral":   "mistral-large-latest",
+    "codestral": "codestral-latest",
+    "qwen":      "qwen-max",
+    "moonshot":  "moonshot-v1-auto",
+    "command":   "command-r-plus",
+    "llama":     "llama-3.3-70b-versatile",
+    "glm":       "glm-4-plus",
+    "sonar":     "llama-3.1-sonar-huge-128k-online",
 }
 
 # 旧版 Opus 映射（1P 不再支持，自动升级）
@@ -164,6 +181,8 @@ def parse_model_alias(model_input: str, provider: APIProvider | None = None) -> 
         return _GEMINI_MODELS["lite"] + suffix
     if base in ("grok",):
         return _GROK_MODELS["grok"] + suffix
+    if base in _OTHER_MODELS:
+        return _OTHER_MODELS[base] + suffix
     if base == "default":
         return get_default_sonnet_model(p) + suffix
 

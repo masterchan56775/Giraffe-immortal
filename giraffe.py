@@ -5,6 +5,14 @@ Giraffe — 主入口
 """
 from __future__ import annotations
 
+import os
+# 在任何第三方库导入前设置，彻底静默 HuggingFace Hub 相关噪声日志
+# 项目不直接使用 HF Hub，警告来自 sentence-transformers 的副作用
+os.environ.setdefault("HF_HUB_VERBOSITY", "error")     # 压制 huggingface_hub 的 WARNING 及以下
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false") # 禁止 tokenizers fork 警告
+os.environ.setdefault("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")  # 禁止 transformers 建议性警告
+
+
 import argparse
 import logging
 from pathlib import Path
@@ -49,7 +57,7 @@ class Giraffe:
 
     BANNER = """
 ╔═══════════════════════════════════════════════════════════╗
-║   Giraffe  v1.8                                           ║
+║   Giraffe  v1.9.5                                         ║
 ║   DAG · Swarm · Telemetry · Memory · SelfHeal             ║
 ╚═══════════════════════════════════════════════════════════╝
 """
@@ -348,6 +356,13 @@ class Giraffe:
             memory_prompt = self.memory.build_system_prompt()
             messages = self.memory.get_context_messages(max_messages=20)
 
+            # 断点检测：若上次会话被工具执行中断，自动注入续接提示
+            try:
+                from memory.session_recovery import maybe_inject_continuation
+                messages = maybe_inject_continuation(messages)
+            except Exception as _e:
+                logger.debug(f"[Chat] 断点检测跳过: {_e}")
+
             # CLAUDE.md / Project Memory 注入
             try:
                 from memory.claude_md import build_context_from_claude_md
@@ -379,8 +394,10 @@ class Giraffe:
             }
             _max_tokens = _MAX_TOKENS_BY_TASK.get(decision.task_type.value, 4096)
 
-            # 执行
-            primary_cfg = self.config.primary_model
+            # 动态查找当前模型的配置凭证
+            configured_models = self.config.get_value("router.configured_models") or {}
+            model_cfg = configured_models.get(decision.primary_model, self.config.primary_model)
+            
             # 构建降级链（过滤空值和重复）
             _fallback_chain = [
                 m for m in [decision.fallback_model, decision.emergency_model]
@@ -389,8 +406,8 @@ class Giraffe:
             ctx = ExecutionContext(
                 message=message,
                 model=decision.primary_model,
-                api_key=primary_cfg.get("api_key", ""),
-                base_url=primary_cfg.get("base_url", ""),
+                api_key=model_cfg.get("api_key", ""),
+                base_url=model_cfg.get("base_url", ""),
                 task_type=decision.task_type.value,
                 messages=messages,
                 system_prompt=memory_prompt,
@@ -474,11 +491,21 @@ class Giraffe:
                 self.evolution_engine.collect(error_report)
                 self.hooks.fire("error_occurred", error=result.error, report=error_report)
 
-            # 每 10 条消息自动记录会话摘要
-            if len(self.memory.short_term) % 10 == 0:
+            # 基于 token 增量 + 工具调用次数的双重阈值自动记录会话摘要
+            _prompt_tokens = len(message) // 4
+            _completion_tokens = len(result.response or "") // 4
+            _tool_calls_this_turn = getattr(result, "tool_calls_made", 0)
+            if self.memory.should_extract_summary(
+                token_count=_prompt_tokens + _completion_tokens,
+                tool_calls=_tool_calls_this_turn,
+            ):
                 self.memory.record_session(
                     session_id=self.state.session_id,
-                    summary=f"会话 {self.state.session_id[:8]}: 共 {len(self.memory.short_term)} 条消息",
+                    summary=(
+                        f"会话 {self.state.session_id[:8]}: "
+                        f"共 {len(self.memory.short_term)} 条消息，"
+                        f"本次工具调用 {_tool_calls_this_turn} 次"
+                    ),
                     tags=[decision.task_type.value],
                 )
 
@@ -570,27 +597,61 @@ class Giraffe:
         """根据模型名返回对应的 SDK client。"""
         from core.config import GiraffeConfig
         _cfg = GiraffeConfig.get()
-        project = _cfg.get_value("router.primary_model.project") or None
+        
+        configured_models = _cfg.get_value("router.configured_models") or {}
+        primary_cfg = configured_models.get(model, _cfg.get_value("router.primary_model") or {})
+        
+        api_key = primary_cfg.get("api_key", "")
+        base_url = primary_cfg.get("base_url", "")
+        project = primary_cfg.get("project") or None
+        use_adc = not api_key or api_key.startswith("${")
 
         if model.startswith("claude-"):
-            from anthropic import AnthropicVertex
-            region = _cfg.get_value("router.claude_location") or "global"
-            return AnthropicVertex(project_id=project, region=region)
+            if use_adc:
+                from anthropic import AnthropicVertex
+                region = _cfg.get_value("router.claude_location") or "global"
+                return AnthropicVertex(project_id=project, region=region)
+            else:
+                from anthropic import Anthropic
+                if base_url:
+                    return Anthropic(api_key=api_key, base_url=base_url)
+                return Anthropic(api_key=api_key)
+
         elif "grok" in model.lower():
-            import google.auth
-            import google.auth.transport.requests
             from openai import OpenAI
-            creds, proj = google.auth.default(
-                scopes=["https://www.googleapis.com/auth/cloud-platform"]
-            )
-            creds.refresh(google.auth.transport.requests.Request())
-            return OpenAI(
-                base_url=f"https://aiplatform.googleapis.com/v1/projects/{proj}/locations/global/endpoints/openapi",
-                api_key=creds.token,
-            )
-        else:
+            if use_adc:
+                import google.auth
+                import google.auth.transport.requests
+                creds, proj = google.auth.default(
+                    scopes=["https://www.googleapis.com/auth/cloud-platform"]
+                )
+                creds.refresh(google.auth.transport.requests.Request())
+                return OpenAI(
+                    base_url=f"https://aiplatform.googleapis.com/v1/projects/{proj}/locations/global/endpoints/openapi",
+                    api_key=creds.token,
+                )
+            else:
+                # Grok API Key
+                if base_url:
+                    return OpenAI(api_key=api_key, base_url=base_url)
+                return OpenAI(api_key=api_key)
+                
+        elif model.startswith("gemini-"):
             from google import genai
-            return genai.Client()
+            if use_adc:
+                region = _cfg.get_value("router.primary_model.location") or "global"
+                return genai.Client(vertexai=True, project=project, location=region)
+            else:
+                if base_url:
+                    return genai.Client(api_key=api_key, http_options={"base_url": base_url})
+                return genai.Client(api_key=api_key)
+                
+        else:
+            # 兼容 OpenAI 的其他平台（OpenAI, DeepSeek, Mistral, Moonshot 等）
+            from openai import OpenAI
+            if base_url:
+                return OpenAI(api_key=api_key, base_url=base_url)
+            return OpenAI(api_key=api_key)
 
     # ─── 调试工具 ─────────────────────────────────────────────────────────────
     def test_route(self, message: str) -> dict:
@@ -737,8 +798,15 @@ def main():
         color=not args.no_color,
     )
 
+    # 压制 huggingface_hub 的 WARNING 日志（由 sentence-transformers 副作用触发）
+    # HF_HUB_VERBOSITY 控制其内部 logger，但也需在 Python logging 层面过滤
+    import logging as _logging
+    for _hf_logger in ("huggingface_hub", "huggingface_hub.utils._http",
+                        "huggingface_hub._commit_api", "filelock"):
+        _logging.getLogger(_hf_logger).setLevel(_logging.ERROR)
+
     if args.version:
-        print("giraffe-immortal 1.8.0")
+        print("giraffe-immortal 1.9.5")
         return
 
     if args.init:
@@ -795,6 +863,7 @@ def main():
         get_default_opus_model as _opus,
         get_default_sonnet_model as _sonnet,
         get_default_haiku_model as _haiku,
+        _OTHER_MODELS,
     )
 
     _MODEL_ALIASES: dict[str, str] = {
@@ -809,6 +878,7 @@ def main():
         "best":      _opus(),
         "opusplan":  _sonnet(),
     }
+    _MODEL_ALIASES.update(_OTHER_MODELS)
 
     _VALID_TIERS = ("nano", "low", "medium", "high", "xhigh")
 
@@ -838,6 +908,16 @@ def main():
         if cmd in ("/quit", "/exit", "/q"):
             print("👋 再见！")
             break
+
+        # /add_model 添加新模型配置
+        elif cmd == "/add_model":
+            from integration.setup_wizard import SetupWizard
+            print("\n⚙️ 正在启动模型配置向导...")
+            SetupWizard().configure_additional_model()
+            # 重新加载配置
+            giraffe.config.reload()
+            print("🔄 配置已重新加载。\n")
+            continue
 
         # /model [name|alias|auto]
         elif cmd == "/model":
@@ -1044,6 +1124,7 @@ def main():
 │  /tier <tier>      锁定档位 (nano/low/medium/high/xhigh)        │
 │  /auto             清除所有锁定，完全自动路由                   │
 │  /grok /claude /gemini /flash  快速切换模型                     │
+│  /add_model        动态配置/补充新模型                          │
 │  /models           列出所有可用别名                             │
 ├─ 技能系统 (Skills) ────────────────────────────────────────────────┤
 │  /skills           列出所有可用技能                             │

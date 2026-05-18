@@ -16,14 +16,14 @@ class ToolResult:
     content: str | list[dict]          # 文本 or 结构化内容块列表
     is_error: bool = False
     tool_use_id: str = ""              # 填充后由 AgenticLoop 使用
+    tool_name: str = ""                # 工具名称，供持久化存储使用
 
     def to_api_block(self) -> dict:
         """转为 Anthropic/OpenAI tool_result 格式。"""
         return {
             "type": "tool_result",
             "tool_use_id": self.tool_use_id,
-            "content": self.content if isinstance(self.content, list)
-                       else self.content,
+            "content": self.content,
             "is_error": self.is_error,
         }
 

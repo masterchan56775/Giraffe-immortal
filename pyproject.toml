@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "giraffe-immortal"
-version = "1.8.0"
+version = "1.9.5"
 description = "生产级 AI 运行时框架 — DAG 执行引擎 | 多智能体 Swarm | 自愈免疫 | 四层记忆"
 readme = "README.md"
 license = {text = "MIT"}

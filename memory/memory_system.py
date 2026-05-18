@@ -87,6 +87,16 @@ class MemorySystem:
         self._refine_interval = 20   # 每20条新消息触发一次精炼
         self._msg_since_refine = 0
 
+        # 摘要触发双重阈值（对应 src sessionMemory.ts）
+        self._token_since_summary: int = 0
+        self._tool_calls_since_summary: int = 0
+        self._min_tokens_between_summary: int = self._cfg.get(
+            "min_tokens_between_summary", 8_000
+        )
+        self._min_tool_calls_between_summary: int = self._cfg.get(
+            "min_tool_calls_between_summary", 5
+        )
+
     @classmethod
     def get(cls, data_dir: Path | str | None = None, config: dict | None = None) -> "MemorySystem":
         if cls._instance is None:
@@ -96,6 +106,38 @@ class MemorySystem:
     @classmethod
     def reset(cls) -> None:
         cls._instance = None
+
+    # ─── 摘要触发 ─────────────────────────────────────────────────────
+    def should_extract_summary(
+        self,
+        token_count: int = 0,
+        tool_calls: int = 0,
+    ) -> bool:
+        """
+        双重阈值判断是否需要记录摘要。
+
+        触发条件（对应 src sessionMemory.ts shouldExtractMemory）：
+          1. token 增量阅值必须达到（必要条件）
+          2. 且 工具调用次数达到 OR 本轮无工具调用（自然对话结束）
+        """
+        self._token_since_summary += token_count
+        self._tool_calls_since_summary += tool_calls
+
+        if self._token_since_summary < self._min_tokens_between_summary:
+            return False
+
+        if self._tool_calls_since_summary >= self._min_tool_calls_between_summary:
+            self._reset_summary_counters()
+            return True
+        if tool_calls == 0:
+            # 自然对话轮次（本轮无工具调用）且 token 已达阈値
+            self._reset_summary_counters()
+            return True
+        return False
+
+    def _reset_summary_counters(self) -> None:
+        self._token_since_summary = 0
+        self._tool_calls_since_summary = 0
 
     # ─── 主处理接口 ────────────────────────────────────────────────────────────
     def process_message(self, role: str, content: str) -> list[MemoryFact]:

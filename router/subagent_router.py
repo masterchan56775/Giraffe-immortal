@@ -16,19 +16,19 @@ logger = logging.getLogger(__name__)
 
 class SubAgentType(str, Enum):
     TEXT_REASONING = "text_reasoning"    # 纯文本推理 → gemini-3-flash-preview
-    CODE           = "code"              # 代码任务 → claude-sonnet-4.6
-    DEEP_REASONING = "deep_reasoning"    # 深度推理 → claude-opus-4.7
-    MULTI_MODEL    = "multi_model"       # 多模型协作 → opus+gpt-5.5
-    VISION         = "vision"            # 视觉任务 → gemini-3.1-flash-lite
+    CODE           = "code"              # 代码任务 → claude-sonnet-4-6
+    DEEP_REASONING = "deep_reasoning"    # 深度推理 → claude-sonnet-4-6 (最强推理)
+    MULTI_MODEL    = "multi_model"       # 多模型协作 → claude-sonnet-4-6 + Grok
+    VISION         = "vision"            # 视觉任务 → claude-sonnet-4-6
 
 
-# 子Agent类型 → 推荐模型
+# 子Agent类型 → 推荐模型（与主路由矩阵对齐：Claude优先）
 SUBAGENT_MODEL_MAP: dict[SubAgentType, str] = {
-    SubAgentType.TEXT_REASONING: "gemini-3-flash-preview",
-    SubAgentType.CODE:           "claude-sonnet-4.6",
-    SubAgentType.DEEP_REASONING: "claude-opus-4.7",
-    SubAgentType.MULTI_MODEL:    "opus-4.7+gpt-5.5",
-    SubAgentType.VISION:         "gemini-3.1-flash-lite",
+    SubAgentType.TEXT_REASONING: "gemini-3-flash-preview",   # 轻量推理保持 Gemini Flash
+    SubAgentType.CODE:           "claude-sonnet-4-6",
+    SubAgentType.DEEP_REASONING: "claude-sonnet-4-6",
+    SubAgentType.MULTI_MODEL:    "claude-sonnet-4-6",
+    SubAgentType.VISION:         "claude-sonnet-4-6",
 }
 
 # 任务类型 → 子Agent类型

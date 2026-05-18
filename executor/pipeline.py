@@ -49,6 +49,8 @@ class ExecutionContext:
     truncated: bool = False          # 回复是否因 max_tokens 被截断
     fallback_models: list[str] = field(default_factory=list)  # 降级模型链
     stage_times: dict[str, float] = field(default_factory=dict)
+    # 内部传递字段（不对外暴露）
+    _tool_calls_made: int = field(default=0, repr=False)
 
     def record_stage(self, stage: str, duration_ms: float) -> None:
         self.stage_times[stage] = round(duration_ms, 2)
@@ -82,6 +84,7 @@ class ExecutionResult:
     error: str | None = None
     tokens_used: int = 0
     truncated: bool = False          # 是否被 max_tokens 截断
+    tool_calls_made: int = 0         # 本次执行的工具调用次数
 
     def to_dict(self) -> dict:
         return {
@@ -307,6 +310,7 @@ class ExecutorPipeline:
             stage_times=final_state.get("stage_times", {}),
             error=error,
             truncated=final_state.get("truncated", False),
+            tool_calls_made=ctx._tool_calls_made,
         )
 
     # ─── 各阶段实现 ────────────────────────────────────────────────────────────
@@ -452,6 +456,7 @@ class ExecutorPipeline:
             ctx.error = agentic_result.error
             return f"[AgenticLoop 错误] {agentic_result.error}"
 
+        ctx._tool_calls_made = agentic_result.tool_calls_made
         logger.info(
             f"[AgenticLoop] 完成: turns={agentic_result.turns} "
             f"tool_calls={agentic_result.tool_calls_made}"
@@ -474,136 +479,225 @@ class ExecutorPipeline:
         return msgs
 
     def _call_api(self, ctx: ExecutionContext, messages: list[dict]) -> str:
-        """实际调用API，根据配置选择 ADC 认证或 OpenAI API Key 认证。"""
+        """实际调用API，根据配置选择 ADC 认证或 API Key 认证。"""
         use_adc = not ctx.api_key or ctx.api_key.startswith("${")
 
-        if use_adc:
-            from core.config import GiraffeConfig
-            _cfg = GiraffeConfig.get()
-            _project = _cfg.get_value("router.primary_model.project") or None
-
-            # ── Claude (Anthropic Vertex) ──────────────────────────────────────
-            # Claude 在 Vertex AI 上使用 rawPredict + Anthropic Messages API，
-            # 与 Gemini 的 generateContent 完全不同。
-            if ctx.model.startswith("claude-"):
+        # ── Claude ──────────────────────────────────────
+        if ctx.model.startswith("claude-"):
+            if use_adc:
+                from core.config import GiraffeConfig
+                _cfg = GiraffeConfig.get()
+                _project = _cfg.get_value("router.primary_model.project") or None
                 return self._call_claude_rawpredict(ctx, messages, _project, _cfg)
+            else:
+                return self._call_claude_apikey(ctx, messages)
 
-            # ── Grok (xAI — OpenAI-compatible) ────────────────────────────────
-            # Grok 使用 xAI API，兼容 OpenAI Chat Completions 格式。
-            # 需要环境变量 XAI_API_KEY。
-            if "grok" in ctx.model.lower():
+        # ── Grok ──────────────────────────────────────
+        elif "grok" in ctx.model.lower():
+            if use_adc:
                 return self._call_grok_xai(ctx, messages)
+            # 使用 API Key 时，由于 xAI 兼容 OpenAI，穿透到最下方的通用 REST 客户端
 
-            try:
-                from google import genai
-                from google.genai import types
-            except ImportError:
-                return f"[Giraffe模拟响应] 缺少 google-genai | 模型:{ctx.model} | 消息:{ctx.message[:50]}..."
+        # ── Gemini ──────────────────────────────────────
+        elif ctx.model.startswith("gemini-"):
+            return self._call_gemini(ctx, messages, use_adc)
 
-            contents = []
-            system_instruction = None
-            for m in messages:
-                role = m.get("role")
-                content = m.get("content", "")
-                if role == "system":
-                    system_instruction = content
-                    continue
-
-                gemini_role = "model" if role == "assistant" else "user"
-                if isinstance(content, list):
-                    parts = []
-                    for p in content:
-                        if p.get("type") == "text":
-                            parts.append(types.Part(text=p["text"]))
-                    if parts:
-                        contents.append(types.Content(role=gemini_role, parts=parts))
-                else:
-                    contents.append(types.Content(role=gemini_role, parts=[types.Part(text=str(content))]))
-
-            try:
-                _location = _cfg.get_value("router.primary_model.location") or "global"
-                client = genai.Client(vertexai=True, project=_project, location=_location)
-                logger.debug(f"[API] Gemini 调用: model={ctx.model} location={_location}")
-
-                config = types.GenerateContentConfig(
-                    temperature=ctx.temperature,
-                    max_output_tokens=ctx.max_tokens,
-                    system_instruction=system_instruction,
-                )
-                response = client.models.generate_content(
-                    model=ctx.model,
-                    contents=contents,
-                    config=config,
-                )
-
-                # 检查信用状态
+        # ── 兼容 OpenAI 协议的 API Key 调用 (OpenAI, DeepSeek, Mistral, xAI 等) ──
+        if use_adc:
+            logger.warning(f"[API] 模型 {ctx.model} 不支持 ADC，将尝试使用空 API Key 调用兼容接口")
+            
+        import json, urllib.request, urllib.error
+        payload = {
+            "model": ctx.model,
+            "messages": messages,
+            "max_tokens": ctx.max_tokens,
+            "temperature": ctx.temperature,
+        }
+        if getattr(ctx, 'mcp_tools', None):
+            payload["tools"] = ctx.mcp_tools
+        data = json.dumps(payload).encode("utf-8")
+        base_url = getattr(ctx, 'base_url', '') or 'https://api.openai.com/v1'
+        url = f"{base_url.rstrip('/')}/chat/completions"
+        req = urllib.request.Request(
+            url,
+            data=data,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {ctx.api_key}",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                resp_data = json.loads(resp.read().decode("utf-8"))
                 if self._credit_monitor:
                     self._credit_monitor.check_credit(200, ctx.model)
-                # response.text 在 thinking-only 或空响应时可能为 None
-                text = response.text
-                if text is None:
-                    try:
-                        parts = []
-                        for cand in response.candidates:
-                            for part in cand.content.parts:
-                                if hasattr(part, 'text') and part.text:
-                                    parts.append(part.text)
-                        text = "\n".join(parts) if parts else ""
-                    except Exception:
-                        text = ""
-                # 检测 finish_reason：若因 max_tokens 截断，标记上下文不进记忆
-                try:
-                    finish_reason = response.candidates[0].finish_reason
-                    if str(finish_reason).upper() in ('MAX_TOKENS', 'FINISHREASON.MAX_TOKENS', '2'):
-                        ctx.truncated = True
-                        logger.warning(
-                            f"[API] 回复被 max_tokens={ctx.max_tokens} 截断 "
-                            f"(model={ctx.model})，建议增大 max_tokens"
-                        )
-                except Exception:
-                    pass
-                return text
-            except Exception as e:
-                try:
-                    from google.api_core.exceptions import GoogleAPIError
-                    if isinstance(e, GoogleAPIError) and self._credit_monitor:
-                        self._credit_monitor.check_credit(getattr(e, 'code', 500), ctx.model)
-                except ImportError:
-                    pass
-                raise
-        else:
-            # 兼容 OpenAI 协议的 API Key 调用
-            import json, urllib.request, urllib.error
-            payload = {
-                "model": ctx.model,
-                "messages": messages,
-                "max_tokens": ctx.max_tokens,
-                "temperature": ctx.temperature,
-            }
-            if getattr(ctx, 'mcp_tools', None):
-                payload["tools"] = ctx.mcp_tools
-            data = json.dumps(payload).encode("utf-8")
-            base_url = getattr(ctx, 'base_url', '') or 'https://api.openai.com/v1'
-            url = f"{base_url.rstrip('/')}/chat/completions"
-            req = urllib.request.Request(
-                url,
-                data=data,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {ctx.api_key}",
-                },
-                method="POST",
+                return resp_data["choices"][0]["message"]["content"]
+        except urllib.error.HTTPError as e:
+            if self._credit_monitor:
+                self._credit_monitor.check_credit(e.code, ctx.model)
+            raise
+
+    def _call_gemini(
+        self,
+        ctx: ExecutionContext,
+        messages: list[dict],
+        use_adc: bool,
+    ) -> str:
+        """调用 Gemini 平台（支持 Vertex ADC 或 Google AI Studio API Key）"""
+        try:
+            from google import genai
+            from google.genai import types
+        except ImportError:
+            return f"[Giraffe模拟响应] 缺少 google-genai | 模型:{ctx.model} | 消息:{ctx.message[:50]}..."
+
+        contents = []
+        system_instruction = None
+        for m in messages:
+            role = m.get("role")
+            content = m.get("content", "")
+            if role == "system":
+                system_instruction = content
+                continue
+
+            gemini_role = "model" if role == "assistant" else "user"
+            if isinstance(content, list):
+                parts = []
+                for p in content:
+                    if p.get("type") == "text":
+                        parts.append(types.Part.from_text(text=p["text"]))
+                if parts:
+                    contents.append(types.Content(role=gemini_role, parts=parts))
+            else:
+                contents.append(types.Content(role=gemini_role, parts=[types.Part.from_text(text=str(content))]))
+
+        try:
+            if use_adc:
+                from core.config import GiraffeConfig
+                _cfg = GiraffeConfig.get()
+                _project = _cfg.get_value("router.primary_model.project") or None
+                _location = _cfg.get_value("router.primary_model.location") or "global"
+                client = genai.Client(vertexai=True, project=_project, location=_location)
+                logger.debug(f"[API] Gemini 调用 (ADC): model={ctx.model} location={_location}")
+            else:
+                # 兼容自定 base_url
+                base_url = getattr(ctx, "base_url", "")
+                if base_url:
+                    # 如果指定了 base_url，可以覆盖 http_options。但通常 genai 知道自己的默认值。
+                    client = genai.Client(api_key=ctx.api_key, http_options={"base_url": base_url})
+                else:
+                    client = genai.Client(api_key=ctx.api_key)
+                logger.debug(f"[API] Gemini 调用 (API Key): model={ctx.model}")
+
+            config = types.GenerateContentConfig(
+                temperature=ctx.temperature,
+                max_output_tokens=ctx.max_tokens,
+                system_instruction=system_instruction,
             )
+            response = client.models.generate_content(
+                model=ctx.model,
+                contents=contents,
+                config=config,
+            )
+
+            if self._credit_monitor:
+                self._credit_monitor.check_credit(200, ctx.model)
+
+            text = response.text
+            if text is None:
+                try:
+                    parts = []
+                    for cand in response.candidates:
+                        for part in cand.content.parts:
+                            if hasattr(part, 'text') and part.text:
+                                parts.append(part.text)
+                    text = "\n".join(parts) if parts else ""
+                except Exception:
+                    text = ""
+
             try:
-                with urllib.request.urlopen(req, timeout=30) as resp:
-                    resp_data = json.loads(resp.read().decode("utf-8"))
-                    if self._credit_monitor:
-                        self._credit_monitor.check_credit(200, ctx.model)
-                    return resp_data["choices"][0]["message"]["content"]
-            except urllib.error.HTTPError as e:
-                if self._credit_monitor:
-                    self._credit_monitor.check_credit(e.code, ctx.model)
-                raise
+                finish_reason = response.candidates[0].finish_reason
+                if str(finish_reason).upper() in ('MAX_TOKENS', 'FINISHREASON.MAX_TOKENS', '2'):
+                    ctx.truncated = True
+                    logger.warning(
+                        f"[API] 回复被 max_tokens={ctx.max_tokens} 截断 (model={ctx.model})"
+                    )
+            except Exception:
+                pass
+            return text
+        except Exception as e:
+            try:
+                from google.api_core.exceptions import GoogleAPIError
+                if isinstance(e, GoogleAPIError) and self._credit_monitor:
+                    self._credit_monitor.check_credit(getattr(e, 'code', 500), ctx.model)
+            except ImportError:
+                pass
+            raise
+
+    def _call_claude_apikey(
+        self,
+        ctx: ExecutionContext,
+        messages: list[dict],
+    ) -> str:
+        """调用 Anthropic 官方平台 (通过 API Key)"""
+        try:
+            from anthropic import Anthropic
+        except ImportError:
+            raise RuntimeError(
+                "[Claude] 需要安装 anthropic 包: pip install anthropic"
+            )
+
+        system_content = None
+        anthropic_messages = []
+        for m in messages:
+            role = m.get("role")
+            content = m.get("content", "")
+            if role == "system":
+                system_content = content
+            elif role in ("user", "assistant"):
+                if isinstance(content, list):
+                    anthropic_messages.append({"role": role, "content": content})
+                else:
+                    anthropic_messages.append({"role": role, "content": str(content)})
+
+        if not anthropic_messages:
+            anthropic_messages = [{"role": "user", "content": ctx.message}]
+
+        logger.debug(f"[Claude] Anthropic API Key 调用: model={ctx.model}")
+        
+        # 支持 base_url 覆盖 (例如代理地址)
+        base_url = getattr(ctx, "base_url", "")
+        if base_url:
+            client = Anthropic(api_key=ctx.api_key, base_url=base_url)
+        else:
+            client = Anthropic(api_key=ctx.api_key)
+
+        kwargs = {
+            "model": ctx.model,
+            "max_tokens": ctx.max_tokens,
+            "messages": anthropic_messages,
+            "temperature": ctx.temperature,
+        }
+        if system_content:
+            kwargs["system"] = system_content
+
+        response = client.messages.create(**kwargs)
+
+        if self._credit_monitor:
+            self._credit_monitor.check_credit(200, ctx.model)
+
+        text = "\n".join(
+            block.text for block in response.content
+            if hasattr(block, "text") and block.text
+        )
+
+        if response.stop_reason == "max_tokens":
+            ctx.truncated = True
+            logger.warning(
+                f"[Claude] 回复被 max_tokens={ctx.max_tokens} 截断 (model={ctx.model})"
+            )
+
+        return text
 
     def _call_grok_xai(
         self,

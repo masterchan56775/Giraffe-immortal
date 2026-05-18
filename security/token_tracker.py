@@ -12,14 +12,22 @@ logger = logging.getLogger(__name__)
 
 # 估算每1000 token成本（USD）—— 仅用于预算估算
 MODEL_COST_PER_1K: dict[str, float] = {
+    # Gemini 系列
     "gemini-3-flash-preview":    0.0005,
-    "gemini-3.1-pro-preview":      0.001,
-    "gemini-3.1-flash-lite":    0.0002,
-    "claude-haiku-4.5": 0.00025,
-    "claude-sonnet-4.6":0.003,
-    "opus-4.7":         0.015,
-    "gpt-5.5":          0.01,
-    "default":          0.001,
+    "gemini-3.1-pro-preview":    0.001,
+    "gemini-3.1-flash-lite":     0.0002,
+    # Claude 系列（连字符格式，新命名规范）
+    "claude-sonnet-4-6":         0.003,
+    "claude-haiku-4-5":          0.00025,
+    "claude-opus-4-6":           0.015,
+    # Grok
+    "xai/grok-4.20-reasoning":   0.005,
+    # 兼容旧名称（点号格式）
+    "claude-sonnet-4.6":         0.003,
+    "claude-haiku-4.5":          0.00025,
+    "opus-4.7":                  0.015,
+    "gpt-5.5":                   0.01,
+    "default":                   0.001,
 }
 
 
