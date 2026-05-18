@@ -8,7 +8,7 @@ __pycache__/
 
 # Distribution / packaging
 .Python
-build/
+
 develop-eggs/
 dist/
 downloads/
@@ -259,3 +259,4 @@ __marimo__/
 /assets/giraffe.png
 /giraffe_launcher.py
 /giraffe_setup.iss
+/build/
